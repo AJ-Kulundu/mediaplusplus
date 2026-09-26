@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "ajkulundu.mediaplusplus",
+  "name": "Media++",
+  "version": "1.0.0",
+  "author": "AJ Kulundu",
+  "description": "MPRIS media control with seek bar, shuffle/repeat, and large cover art",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Media++",
+    "description": "Now-playing with seek bar, shuffle/repeat, and cover art",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaults": {
+      "labelWidth": 136,
+      "scrollSpeed": 0.6,
+      "scrollPause": 5
+    },
+    "schema": [
+      {
+        "key": "labelWidth",
+        "type": "int",
+        "label": "Label width"
+      },
+      {
+        "key": "scrollSpeed",
+        "type": "real",
+        "label": "Carousel speed"
+      },
+      {
+        "key": "scrollPause",
+        "type": "int",
+        "label": "Pause between cycles (s)"
+      }
+    ]
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.media"
+  }
+}
