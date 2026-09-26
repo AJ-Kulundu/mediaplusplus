@@ -42,6 +42,28 @@ BarWidget {
   readonly property bool loopSupported: mediaService ? mediaService.loopSupported : false
   readonly property string loopLabel: mediaService ? mediaService.loopLabel : "Repeat off"
 
+  // Secondary text colour, valid in both light and dark themes.
+  //
+  // Upstream (and every stock panel: bluetooth, weather, tailscale, Dropdown)
+  // dims secondary text with Qt.darker(foreground, n). That only holds on a
+  // dark theme. On a light theme the foreground is already near-black --
+  // Flexoki Light is #100F0F -- so darkening it RAISES contrast, and the
+  // "muted" album/artist/time labels end up more prominent than the title they
+  // sit beneath. The hierarchy inverts exactly where it matters most.
+  //
+  // Mixing the foreground toward the surface it is drawn on always moves away
+  // from the text colour, whichever direction that is, so a larger amount is
+  // always fainter in both modes. Alpha is taken from the foreground so a
+  // translucent popup background cannot bleed transparency into the text.
+  function mutedText(amount) {
+    var fg = bar ? bar.foreground : Color.foreground
+    var bg = Color.popups.background
+    return Qt.rgba(fg.r + (bg.r - fg.r) * amount,
+                   fg.g + (bg.g - fg.g) * amount,
+                   fg.b + (bg.b - fg.b) * amount,
+                   fg.a)
+  }
+
   function formatTime(seconds) {
     return mediaService ? mediaService.formatTime(seconds) : "0:00"
   }
@@ -49,6 +71,17 @@ BarWidget {
   property bool popupOpen: false
 
   function close() { popupOpen = false }
+
+  // Shape contract for shell summon/hide/toggle routing: Bar.findPanelWidget
+  // requires open(), close() and `opened` on the bar-widget root before it
+  // will route to a widget at all. With these present,
+  // `omarchy-shell shell toggle <plugin-id>` reaches this popup, and the bar
+  // picks the instance on the focused monitor rather than opening one popup
+  // per screen. Going through shell routing rather than a second IpcHandler
+  // also avoids fighting the service for the single handler a target allows.
+  readonly property bool opened: popupOpen
+  function open() { popupOpen = true }
+  function toggle() { popupOpen = !popupOpen }
   // Fixed label width. The bar slot must not resize as tracks change -- a
   // widget that grows and shrinks with the title shoves every widget beside it
   // sideways on every track change. The label column is always this wide
@@ -120,7 +153,13 @@ BarWidget {
     Item {
       id: scrollClip
       width: root.labelWidth
-      height: glyph.height
+      // Tall enough for the text's own line box, not just the artwork.
+      // This clip exists to bound horizontal scrolling; sizing it to the
+      // artwork (18px) made it shorter than the label's line height and
+      // clip:true then sliced the descenders off g/j/p/q/y. It only showed
+      // on some tracks -- "Wizkid" has no descenders, "Flaxy" does -- which
+      // made it look like a browser-specific fault rather than a height bug.
+      height: Math.max(glyph.height, labelText.implicitHeight)
       clip: true
       anchors.verticalCenter: parent.verticalCenter
       visible: !root.bar.vertical && root.title !== ""
@@ -270,7 +309,7 @@ BarWidget {
             anchors.centerIn: parent
             visible: !artFrame.ready
             text: root.isVideo ? "󰕧" : "󰝚"
-            color: Qt.darker(root.bar.foreground, 1.4)
+            color: root.mutedText(0.32)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.displayLarge
           }
@@ -295,7 +334,7 @@ BarWidget {
 
         Text {
           text: root.artist
-          color: Qt.darker(root.bar.foreground, 1.3)
+          color: root.mutedText(0.26)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
           elide: Text.ElideRight
@@ -306,7 +345,7 @@ BarWidget {
 
         Text {
           text: root.activePlayer && root.activePlayer.trackAlbum ? root.activePlayer.trackAlbum : ""
-          color: Qt.darker(root.bar.foreground, 1.6)
+          color: root.mutedText(0.43)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
@@ -352,7 +391,7 @@ BarWidget {
 
           Text {
             text: root.formatTime(seekSlider.dragging ? seekSlider.liveValue : root.trackPosition)
-            color: Qt.darker(root.bar.foreground, 1.4)
+            color: root.mutedText(0.32)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
             width: parent.width / 2
@@ -361,7 +400,7 @@ BarWidget {
 
           Text {
             text: root.formatTime(root.trackLength)
-            color: Qt.darker(root.bar.foreground, 1.4)
+            color: root.mutedText(0.32)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
             width: parent.width / 2
@@ -372,38 +411,53 @@ BarWidget {
 
       // ------------------------------------------------------------ controls
       //
-      // Shuffle and repeat flank the transport. Players that do not advertise
-      // support for them are dimmed and inert rather than hidden, so the row
-      // does not reflow every time you switch source.
+      // Symmetric around play/pause: shuffle | prev | -10s | play | +10s |
+      // next | repeat. Shuffle and repeat flank the transport, and players
+      // that do not advertise support for a control are dimmed and inert
+      // rather than hidden, so the row does not reflow when you switch source.
       Row {
+        id: controls
         anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(4)
+        spacing: Style.space(2)
+
+        // One slot size for every button. Button derives its own size from
+        // icon plus padding, so the larger play glyph and its wider padding
+        // made that one button taller and the row read as ragged. Pinning
+        // width and height makes the row uniform; Button centres its content
+        // on both axes, so the bigger play icon still sits square in its slot.
+        readonly property real slot: Style.space(30)
 
         Button {
+          width: controls.slot; height: controls.slot
           iconText: "󰒝"
           foreground: root.shuffleOn ? Color.accent : root.bar.foreground
-          horizontalPadding: Style.spacing.controlPaddingX
-          verticalPadding: Style.spacing.controlPaddingY
           enabled: root.shuffleSupported
           opacity: !enabled ? 0.35 : (root.shuffleOn ? 1.0 : 0.6)
           onClicked: if (root.mediaService) root.mediaService.toggleShuffle()
         }
 
         Button {
+          width: controls.slot; height: controls.slot
           iconText: "󰒮"
           foreground: root.bar.foreground
-          horizontalPadding: Style.spacing.controlPaddingX
-          verticalPadding: Style.spacing.controlPaddingY
           enabled: root.activePlayer && root.activePlayer.canGoPrevious
           opacity: enabled ? 1.0 : 0.4
           onClicked: if (root.mediaService) root.mediaService.runAction("previous", false, root.mediaService.playerKey(root.activePlayer))
         }
 
         Button {
+          width: controls.slot; height: controls.slot
+          iconText: "󰴪"
+          foreground: root.bar.foreground
+          enabled: root.canSeek
+          opacity: enabled ? 1.0 : 0.4
+          onClicked: if (root.mediaService) root.mediaService.seekBy(-10)
+        }
+
+        Button {
+          width: controls.slot; height: controls.slot
           iconText: root.activePlayer && root.activePlayer.isPlaying ? "󰏤" : "󰐊"
           foreground: root.bar.foreground
-          horizontalPadding: Style.spacing.panelGap
-          verticalPadding: Style.spacing.controlPaddingY
           iconSize: Style.font.iconLarge
           enabled: root.activePlayer && (root.activePlayer.canTogglePlaying || root.activePlayer.canPlay || root.activePlayer.canPause)
           opacity: enabled ? 1.0 : 0.4
@@ -411,22 +465,29 @@ BarWidget {
         }
 
         Button {
+          width: controls.slot; height: controls.slot
+          iconText: "󰵱"
+          foreground: root.bar.foreground
+          enabled: root.canSeek
+          opacity: enabled ? 1.0 : 0.4
+          onClicked: if (root.mediaService) root.mediaService.seekBy(10)
+        }
+
+        Button {
+          width: controls.slot; height: controls.slot
           iconText: "󰒭"
           foreground: root.bar.foreground
-          horizontalPadding: Style.spacing.controlPaddingX
-          verticalPadding: Style.spacing.controlPaddingY
           enabled: root.activePlayer && root.activePlayer.canGoNext
           opacity: enabled ? 1.0 : 0.4
           onClicked: if (root.mediaService) root.mediaService.runAction("next", false, root.mediaService.playerKey(root.activePlayer))
         }
 
         Button {
+          width: controls.slot; height: controls.slot
           // repeat-off / repeat-all / repeat-one
           iconText: root.loopLabel === "Repeat track" ? "󰑘"
             : root.loopLabel === "Repeat all" ? "󰑖" : "󰑗"
           foreground: root.loopLabel === "Repeat off" ? root.bar.foreground : Color.accent
-          horizontalPadding: Style.spacing.controlPaddingX
-          verticalPadding: Style.spacing.controlPaddingY
           enabled: root.loopSupported
           opacity: !enabled ? 0.35 : (root.loopLabel === "Repeat off" ? 0.6 : 1.0)
           onClicked: if (root.mediaService) root.mediaService.cycleLoop()
@@ -499,7 +560,7 @@ BarWidget {
 
                 Text {
                   text: sourceRow.sourceDetail
-                  color: Qt.darker(root.bar.foreground, 1.5)
+                  color: root.mutedText(0.38)
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
