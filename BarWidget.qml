@@ -404,8 +404,31 @@ BarWidget {
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.namespace: "mediaplusplus-keys"
     WlrLayershell.layer: WlrLayer.Overlay
+    // Prime with Exclusive, then settle on OnDemand -- the same two-phase
+    // handoff KeyboardPanel performs, and for the same reason. Exclusive is
+    // what actually wins focus for a freshly mapped surface, but while it is
+    // held the compositor suppresses pointer hit-testing everywhere, which is
+    // why holding it left the hotkeys working and every mouse click dead.
+    // OnDemand keeps the focus already granted and gives the pointer back.
+    property bool focusPrimed: false
+
     WlrLayershell.keyboardFocus: root.popupOpen
-      ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+      ? (focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+      : WlrKeyboardFocus.None
+
+    onVisibleChanged: {
+      focusPrimed = false
+      if (visible) focusPrimeTimer.restart()
+      else focusPrimeTimer.stop()
+    }
+
+    Timer {
+      id: focusPrimeTimer
+      // Long enough for the surface to map and take focus, short enough that
+      // the pointer-blocking phase is imperceptible.
+      interval: 75
+      onTriggered: if (root.popupOpen) keyWindow.focusPrimed = true
+    }
     anchors { top: true; left: true }
     implicitWidth: 1
     implicitHeight: 1
