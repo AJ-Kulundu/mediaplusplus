@@ -3,7 +3,6 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Widgets
 import Quickshell.Wayland
-import Quickshell.Hyprland
 import qs.Ui
 import qs.Commons
 
@@ -216,7 +215,12 @@ BarWidget {
   // Leaving the settings view open would mean the next summon lands on the
   // form rather than on what is playing, which is not what a media popup is
   // for. Reset whenever the popup closes, however it was closed.
-  onPopupOpenChanged: if (!popupOpen) settingsOpen = false
+  onPopupOpenChanged: {
+    if (popupOpen) return
+    settingsOpen = false
+    dismissArmed = false
+    leaveTimer.stop()
+  }
 
   // Which bar section this widget currently sits in, read back from the live
   // shell config rather than cached locally -- the user can also move the
@@ -498,6 +502,13 @@ BarWidget {
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.namespace: "mediaplusplus-keys"
     WlrLayershell.layer: WlrLayer.Overlay
+    // Focus is taken once, when the popup opens, and never chased after.
+    // Re-priming on pointer entry (to win focus back from focus-follows-mouse)
+    // churned the compositor: each re-prime is a focus change that also
+    // suppresses pointer hit-testing while it lasts, so moving over the popup
+    // made the cursor flicker. It never delivered keys reliably either --
+    // OnDemand cannot hold focus for a 1x1 click-through surface.
+    //
     // Prime with Exclusive, then settle on OnDemand -- the same two-phase
     // handoff KeyboardPanel performs, and for the same reason. Exclusive is
     // what actually wins focus for a freshly mapped surface, but while it is
@@ -514,17 +525,6 @@ BarWidget {
       focusPrimed = false
       if (visible) focusPrimeTimer.restart()
       else focusPrimeTimer.stop()
-    }
-
-    // Re-run the prime. OnDemand keeps the pointer usable but does not hold
-    // keyboard focus against focus-follows-mouse: crossing any window on the
-    // way back to the popup hands focus to that window and the hotkeys go
-    // quiet. Re-priming when the pointer lands on the popup takes focus back,
-    // with the pointer-blocking Exclusive phase lasting only the 75ms below.
-    function reclaimFocus() {
-      if (!visible) return
-      focusPrimed = false
-      focusPrimeTimer.restart()
     }
 
     Timer {
@@ -552,16 +552,38 @@ BarWidget {
   // instead: PopupCard's is disabled (triggerMode "hover"), and this one
   // lists both surfaces, so focus moving between them is not "outside" and
   // click-outside dismissal still works.
-  HyprlandFocusGrab {
-    active: root.popupOpen
-    // The bar belongs in here too. PopupCard's own grab listed the popup and
-    // its anchor window; dropping the anchor meant the pointer crossing the
-    // bar counted as "outside" and closed the popup out from under the click
-    // that was on its way to it.
-    windows: popup.anchorWindow
-      ? [keyWindow, popup, popup.anchorWindow]
-      : [keyWindow, popup]
-    onCleared: root.close()
+  // Dismissal follows the pointer, not the focus.
+  //
+  // HyprlandFocusGrab closes on any compositor focus change, and under
+  // focus-follows-mouse every window the pointer crosses is one -- so the
+  // popup was torn down on the way to it, before the cursor ever arrived.
+  // The stock panels dodge this by being full-screen layer surfaces the
+  // pointer never leaves; an xdg popup cannot.
+  //
+  // So: nothing auto-closes until the pointer has actually reached the popup.
+  // After that, leaving it briefly closes it. Opening by hotkey with the
+  // mouse elsewhere stays open until Esc, the widget, or the hotkey -- and
+  // reaching for it with the mouse now works.
+  property bool dismissArmed: false
+
+  Connections {
+    target: popupHover
+    function onHoveredChanged() {
+      if (popupHover.hovered) {
+        root.dismissArmed = true
+        leaveTimer.stop()
+      } else if (root.dismissArmed) {
+        leaveTimer.restart()
+      }
+    }
+  }
+
+  Timer {
+    id: leaveTimer
+    // Enough to cross the gap back to the bar widget or overshoot an edge,
+    // without the popup feeling like it is loitering.
+    interval: 900
+    onTriggered: if (!popupHover.hovered) root.close()
   }
 
   PopupCard {
@@ -569,7 +591,8 @@ BarWidget {
     anchorItem: root
     bar: root.bar
     owner: root
-    // Its grab is replaced by the one above, which also covers keyWindow.
+    // "hover" disables PopupCard's own focus grab; the pointer-leave timer
+    // above handles dismissal instead.
     triggerMode: "hover"
     open: root.popupOpen
 
@@ -581,8 +604,8 @@ BarWidget {
       z: 100
 
       HoverHandler {
+        id: popupHover
         blocking: false
-        onHoveredChanged: if (hovered) keyWindow.reclaimFocus()
       }
     }
     contentWidth: popup.fittedContentWidth(Style.space(240))

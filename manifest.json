@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "ajkulundu.mediaplusplus",
   "name": "Media++",
-  "version": "0.4.1",
+  "version": "1.0.0",
   "author": "AJ Kulundu",
-  "description": "MPRIS media control with seek bar, shuffle/repeat, and large cover art",
+  "description": "MPRIS media player with seeking, shuffle and repeat, vinyl artwork, animated progress styles, a settings panel and hotkeys",
   "kinds": [
     "service",
     "bar-widget"
