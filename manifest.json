@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ajkulundu.mediaplusplus",
   "name": "Media++",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "author": "AJ Kulundu",
   "description": "MPRIS media control with seek bar, shuffle/repeat, and large cover art",
   "kinds": [
@@ -22,7 +22,8 @@
     "defaults": {
       "labelWidth": 136,
       "scrollSpeed": 0.6,
-      "scrollPause": 5
+      "scrollPause": 5,
+      "artworkStyle": "square"
     },
     "schema": [
       {
@@ -39,6 +40,11 @@
         "key": "scrollPause",
         "type": "int",
         "label": "Pause between cycles (s)"
+      },
+      {
+        "key": "artworkStyle",
+        "type": "string",
+        "label": "Popup artwork"
       }
     ]
   },

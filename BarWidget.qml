@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import Quickshell
 import qs.Ui
 import qs.Commons
@@ -69,8 +70,64 @@ BarWidget {
   }
 
   property bool popupOpen: false
+  property bool settingsOpen: false
 
-  function close() { popupOpen = false }
+  // Leaving the settings view open would mean the next summon lands on the
+  // form rather than on what is playing, which is not what a media popup is
+  // for. Reset whenever the popup closes, however it was closed.
+  onPopupOpenChanged: if (!popupOpen) settingsOpen = false
+
+  // Which bar section this widget currently sits in, read back from the live
+  // shell config rather than cached locally -- the user can also move the
+  // widget by dragging it on the bar or via `omarchy bar move`, and the form
+  // has to show where it actually is, not where this popup last put it.
+  readonly property string barSection: {
+    var cfg = bar && bar.shell ? bar.shell.shellConfig : null
+    var layout = cfg && cfg.bar ? cfg.bar.layout : null
+    if (!layout) return "center"
+    var sections = ["left", "center", "right"]
+    for (var i = 0; i < sections.length; i++) {
+      var list = layout[sections[i]]
+      if (!Array.isArray(list)) continue
+      for (var j = 0; j < list.length; j++) {
+        if (list[j] && String(list[j].id) === root.moduleName) return sections[i]
+      }
+    }
+    return "center"
+  }
+
+  // Popup artwork presentation: "square" (default) or "vinyl".
+  readonly property string artworkStyle: String(setting("artworkStyle", "square"))
+  readonly property bool vinylArtwork: artworkStyle === "vinyl"
+
+  // Section changes go through `omarchy bar move`, but a per-widget setting is
+  // an inline field on this widget's own layout entry, which the shell writes
+  // through updateEntryInline -- the same path the clock uses when it cycles
+  // its format. Applied to `settings` locally first so the artwork flips on
+  // the click itself rather than after the config round-trip.
+  function setArtworkStyle(style) {
+    if (style !== "square" && style !== "vinyl") return
+    if (style === root.artworkStyle) return
+
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
+    entry.artworkStyle = style
+
+    root.settings = entry
+    if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
+      bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  // `omarchy bar move` owns the shell.json write and the relayout; going
+  // through it keeps this popup from hand-editing the layout and racing the
+  // shell's own config watcher.
+  function setBarSection(section) {
+    if (!bar || !section || section === root.barSection) return
+    bar.run("omarchy bar move " + bar.shellQuote(root.moduleName)
+            + " --section " + bar.shellQuote(section))
+  }
+
+  function close() { popupOpen = false; settingsOpen = false }
 
   // Shape contract for shell summon/hide/toggle routing: Bar.findPanelWidget
   // requires open(), close() and `opened` on the bar-widget root before it
@@ -263,322 +320,632 @@ BarWidget {
       anchors.fill: parent
       spacing: Style.space(10)
 
-      // ------------------------------------------------------------- artwork
+      // -------------------------------------------------------------- header
       //
-      // The frame takes its shape from the artwork's own pixels rather than
-      // from the metadata guess: a square album cover stays square, a 16:9
-      // video thumbnail stays 16:9, and anything unusual is letterboxed
-      // instead of cropped. mediaKind only picks the placeholder glyph, so a
-      // wrong guess costs an icon, never a mangled image.
+      // Gear sits top-right, in the column flow rather than floating over the
+      // artwork -- a 16:9 thumbnail reaches the full content width, so an
+      // overlaid button would sit on top of the picture.
       Item {
-        id: artFrame
-
-        readonly property bool ready: artImage.status === Image.Ready
-          && artImage.sourceSize.width > 0 && artImage.sourceSize.height > 0
-        readonly property real aspect: ready
-          ? artImage.sourceSize.width / artImage.sourceSize.height
-          : (root.isVideo ? 16 / 9 : 1)
-        readonly property real maxHeight: Style.space(168)
-
-        anchors.horizontalCenter: parent.horizontalCenter
-        height: Math.min(maxHeight, column.width / Math.max(0.2, aspect))
-        width: Math.min(column.width, height * Math.max(0.2, aspect))
-
-        Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
-        Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
-
-        BorderSurface {
-          anchors.fill: parent
-          radius: Style.spacing.labelGap
-          color: Style.normalFillFor(root.bar.foreground, Color.accent)
-          borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
-          clip: true
-
-          Image {
-            id: artImage
-            anchors.fill: parent
-            anchors.margins: Style.space(2)
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
-            cache: true
-            source: root.artUrl
-            visible: artFrame.ready
-          }
-
-          Text {
-            anchors.centerIn: parent
-            visible: !artFrame.ready
-            text: root.isVideo ? "󰕧" : "󰝚"
-            color: root.mutedText(0.32)
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.displayLarge
-          }
-        }
-      }
-
-      // ---------------------------------------------------------- track text
-      Column {
         width: parent.width
-        spacing: Style.space(2)
+        height: gearButton.height
 
         Text {
-          text: root.title || "Nothing playing"
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          visible: root.settingsOpen
+          text: "Settings"
           color: root.bar.foreground
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.subtitle
           font.bold: true
-          elide: Text.ElideRight
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
         }
 
-        Text {
-          text: root.artist
-          color: root.mutedText(0.26)
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          elide: Text.ElideRight
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          visible: text !== ""
-        }
-
-        Text {
-          text: root.activePlayer && root.activePlayer.trackAlbum ? root.activePlayer.trackAlbum : ""
-          color: root.mutedText(0.43)
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          visible: text !== ""
-        }
-      }
-
-      // ------------------------------------------------------------ seek bar
-      //
-      // Hidden entirely for players that report no length (most live streams),
-      // rather than showing a bar that can never fill. While dragging, the
-      // elapsed label follows the knob so you can see where you are landing.
-      Item {
-        id: seekBlock
-        width: parent.width
-        height: seekSlider.implicitHeight + timeRow.implicitHeight
-        visible: root.hasLength
-
-        PanelSlider {
-          id: seekSlider
-          bar: root.bar
+        Button {
+          id: gearButton
+          anchors.right: parent.right
           anchors.top: parent.top
-          anchors.left: parent.left
-          anchors.right: parent.right
-          minimum: 0
-          maximum: Math.max(1, root.trackLength)
-          step: 5
-          value: root.trackPosition
-          enabled: root.canSeek
-          opacity: root.canSeek ? 1.0 : 0.45
-          onReleased: function(value) {
-            if (root.mediaService) root.mediaService.seekToSeconds(value)
-          }
-        }
-
-        Row {
-          id: timeRow
-          anchors.top: seekSlider.bottom
-          anchors.left: parent.left
-          anchors.right: parent.right
-
-          Text {
-            text: root.formatTime(seekSlider.dragging ? seekSlider.liveValue : root.trackPosition)
-            color: root.mutedText(0.32)
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.caption
-            width: parent.width / 2
-            horizontalAlignment: Text.AlignLeft
-          }
-
-          Text {
-            text: root.formatTime(root.trackLength)
-            color: root.mutedText(0.32)
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.caption
-            width: parent.width / 2
-            horizontalAlignment: Text.AlignRight
-          }
-        }
-      }
-
-      // ------------------------------------------------------------ controls
-      //
-      // Symmetric around play/pause: shuffle | prev | -10s | play | +10s |
-      // next | repeat. Shuffle and repeat flank the transport, and players
-      // that do not advertise support for a control are dimmed and inert
-      // rather than hidden, so the row does not reflow when you switch source.
-      Row {
-        id: controls
-        anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(2)
-
-        // One slot size for every button. Button derives its own size from
-        // icon plus padding, so the larger play glyph and its wider padding
-        // made that one button taller and the row read as ragged. Pinning
-        // width and height makes the row uniform; Button centres its content
-        // on both axes, so the bigger play icon still sits square in its slot.
-        readonly property real slot: Style.space(30)
-
-        Button {
-          width: controls.slot; height: controls.slot
-          iconText: "󰒝"
-          foreground: root.shuffleOn ? Color.accent : root.bar.foreground
-          enabled: root.shuffleSupported
-          opacity: !enabled ? 0.35 : (root.shuffleOn ? 1.0 : 0.6)
-          onClicked: if (root.mediaService) root.mediaService.toggleShuffle()
-        }
-
-        Button {
-          width: controls.slot; height: controls.slot
-          iconText: "󰒮"
+          width: Style.space(26)
+          height: Style.space(26)
+          iconText: root.settingsOpen ? "󰝚" : "󰒓"
           foreground: root.bar.foreground
-          enabled: root.activePlayer && root.activePlayer.canGoPrevious
-          opacity: enabled ? 1.0 : 0.4
-          onClicked: if (root.mediaService) root.mediaService.runAction("previous", false, root.mediaService.playerKey(root.activePlayer))
+          opacity: root.settingsOpen ? 1.0 : 0.55
+          onClicked: root.settingsOpen = !root.settingsOpen
         }
-
-        Button {
-          width: controls.slot; height: controls.slot
-          iconText: "󰴪"
-          foreground: root.bar.foreground
-          enabled: root.canSeek
-          opacity: enabled ? 1.0 : 0.4
-          onClicked: if (root.mediaService) root.mediaService.seekBy(-10)
-        }
-
-        Button {
-          width: controls.slot; height: controls.slot
-          iconText: root.activePlayer && root.activePlayer.isPlaying ? "󰏤" : "󰐊"
-          foreground: root.bar.foreground
-          iconSize: Style.font.iconLarge
-          enabled: root.activePlayer && (root.activePlayer.canTogglePlaying || root.activePlayer.canPlay || root.activePlayer.canPause)
-          opacity: enabled ? 1.0 : 0.4
-          onClicked: if (root.mediaService) root.mediaService.runAction("playPause", false, root.mediaService.playerKey(root.activePlayer))
-        }
-
-        Button {
-          width: controls.slot; height: controls.slot
-          iconText: "󰵱"
-          foreground: root.bar.foreground
-          enabled: root.canSeek
-          opacity: enabled ? 1.0 : 0.4
-          onClicked: if (root.mediaService) root.mediaService.seekBy(10)
-        }
-
-        Button {
-          width: controls.slot; height: controls.slot
-          iconText: "󰒭"
-          foreground: root.bar.foreground
-          enabled: root.activePlayer && root.activePlayer.canGoNext
-          opacity: enabled ? 1.0 : 0.4
-          onClicked: if (root.mediaService) root.mediaService.runAction("next", false, root.mediaService.playerKey(root.activePlayer))
-        }
-
-        Button {
-          width: controls.slot; height: controls.slot
-          // repeat-off / repeat-all / repeat-one
-          iconText: root.loopLabel === "Repeat track" ? "󰑘"
-            : root.loopLabel === "Repeat all" ? "󰑖" : "󰑗"
-          foreground: root.loopLabel === "Repeat off" ? root.bar.foreground : Color.accent
-          enabled: root.loopSupported
-          opacity: !enabled ? 0.35 : (root.loopLabel === "Repeat off" ? 0.6 : 1.0)
-          onClicked: if (root.mediaService) root.mediaService.cycleLoop()
-        }
-      }
-
-      PanelSeparator {
-        visible: root.sourcePlayers.length > 1
-        foreground: root.bar.foreground
       }
 
       Column {
-        id: sourceList
-        visible: root.sourcePlayers.length > 1
+        id: playerView
+        visible: !root.settingsOpen
         width: parent.width
-        spacing: Style.space(4)
+        spacing: Style.space(10)
 
-        Repeater {
-          model: root.sourcePlayers
+        // ------------------------------------------------------------- artwork
+        //
+        // The frame takes its shape from the artwork's own pixels rather than
+        // from the metadata guess: a square album cover stays square, a 16:9
+        // video thumbnail stays 16:9, and anything unusual is letterboxed
+        // instead of cropped. mediaKind only picks the placeholder glyph, so a
+        // wrong guess costs an icon, never a mangled image.
+        Item {
+          id: artFrame
+
+          readonly property bool ready: artImage.status === Image.Ready
+            && artImage.sourceSize.width > 0 && artImage.sourceSize.height > 0
+          readonly property real aspect: ready
+            ? artImage.sourceSize.width / artImage.sourceSize.height
+            : (root.isVideo ? 16 / 9 : 1)
+          readonly property real maxHeight: Style.space(168)
+
+          visible: !root.vinylArtwork
+          anchors.horizontalCenter: parent.horizontalCenter
+          height: visible ? Math.min(maxHeight, column.width / Math.max(0.2, aspect)) : 0
+          width: visible ? Math.min(column.width, height * Math.max(0.2, aspect)) : 0
+
+          Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+          Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+
+          // Cursor position over the cover, normalised to -0.5..0.5 on each
+          // axis. Drives both the tilt and where the light falls, so the two
+          // read as one object turning under a fixed light rather than two
+          // unrelated animations.
+          readonly property real hoverX: artHover.hovered
+            ? Math.max(-0.5, Math.min(0.5, artHover.point.position.x / Math.max(1, width) - 0.5)) : 0
+          readonly property real hoverY: artHover.hovered
+            ? Math.max(-0.5, Math.min(0.5, artHover.point.position.y / Math.max(1, height) - 0.5)) : 0
+          readonly property bool lifted: artHover.hovered && ready
+
+          Item {
+            id: artTilt
+            anchors.fill: parent
+
+            // Small angles on purpose: without a perspective matrix an axis
+            // rotation is an orthographic squash, which reads as a tilt only
+            // while it stays shallow. Past roughly ten degrees it starts to
+            // look like the cover is being flattened rather than turned.
+            transform: [
+              Rotation {
+                origin.x: artTilt.width / 2
+                origin.y: artTilt.height / 2
+                axis { x: 1; y: 0; z: 0 }
+                angle: -artFrame.hoverY * 13
+              },
+              Rotation {
+                origin.x: artTilt.width / 2
+                origin.y: artTilt.height / 2
+                axis { x: 0; y: 1; z: 0 }
+                angle: artFrame.hoverX * 13
+              },
+              Scale {
+                origin.x: artTilt.width / 2
+                origin.y: artTilt.height / 2
+                xScale: artFrame.lifted ? 1.03 : 1.0
+                yScale: artFrame.lifted ? 1.03 : 1.0
+              }
+            ]
+
+            // The lift. Layered only while hovered so the effect node is not
+            // kept alive for a cover nobody is pointing at. MultiEffect pads
+            // its own bounds for the shadow, so it is not clipped by the item.
+            layer.enabled: artFrame.lifted
+            layer.effect: MultiEffect {
+              shadowEnabled: true
+              shadowBlur: 0.7
+              shadowVerticalOffset: Style.space(5)
+              shadowOpacity: 0.5
+              shadowColor: "black"
+              brightness: 0.05
+            }
+
+            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
           BorderSurface {
-            id: sourceRow
-            required property var modelData
-
-            readonly property var player: modelData
-            readonly property bool selected: root.activePlayer && player
-              && root.mediaService.playerKey(root.activePlayer) === root.mediaService.playerKey(player)
-            readonly property string sourceTitle: player ? (player.trackTitle || player.identity || player.desktopEntry || "Media source") : "Media source"
-            readonly property string sourceDetail: player && player.trackArtist ? player.trackArtist : (player && player.identity ? player.identity : "")
-
-            width: sourceList.width
-            height: sourceInner.implicitHeight + Style.space(10)
+            anchors.fill: parent
             radius: Style.spacing.labelGap
-            color: selected ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
-            borderSpec: selected ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
+            color: Style.normalFillFor(root.bar.foreground, Color.accent)
+            borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+            clip: true
 
-            Row {
-              id: sourceInner
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              anchors.leftMargin: sourceRow.borderLeft + Style.space(8)
-              anchors.rightMargin: sourceRow.borderRight + Style.space(8)
-              spacing: Style.space(8)
+            Image {
+              id: artImage
+              anchors.fill: parent
+              anchors.margins: Style.space(2)
+              fillMode: Image.PreserveAspectFit
+              asynchronous: true
+              cache: true
+              source: root.artUrl
+              visible: artFrame.ready
+            }
 
-              Text {
-                text: sourceRow.player && sourceRow.player.isPlaying ? "󰏤" : "󰐊"
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.body
-                width: Style.space(18)
-                horizontalAlignment: Text.AlignHCenter
-                anchors.verticalCenter: parent.verticalCenter
+            Text {
+              anchors.centerIn: parent
+              visible: !artFrame.ready
+              text: root.isVideo ? "󰕧" : "󰝚"
+              color: root.mutedText(0.32)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.displayLarge
+            }
+
+            // The light. A soft diagonal band that sits under the cursor, so
+            // moving across the cover sweeps the highlight with it. Inside the
+            // clipping surface so it never spills past the rounded corners.
+            Rectangle {
+              id: sheen
+              width: parent.width * 0.55
+              height: parent.height * 2
+              rotation: 18
+              transformOrigin: Item.Center
+              x: (artFrame.hoverX + 0.5) * parent.width - width / 2
+              y: -parent.height / 2
+              opacity: artFrame.lifted ? 1 : 0
+              visible: opacity > 0
+
+              gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0) }
+                GradientStop { position: 0.5; color: Qt.rgba(1, 1, 1, 0.17) }
+                GradientStop { position: 1.0; color: Qt.rgba(1, 1, 1, 0) }
               }
 
-              Column {
-                width: parent.width - Style.space(26)
-                spacing: Style.space(1)
-                anchors.verticalCenter: parent.verticalCenter
+              Behavior on opacity { NumberAnimation { duration: 160 } }
+              Behavior on x { NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+            }
+          }
+          }
 
-                Text {
-                  text: sourceRow.sourceTitle
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: sourceRow.selected
-                  elide: Text.ElideRight
-                  width: parent.width
-                }
+          // HoverHandler rather than a hover-enabled MouseArea: it is the
+          // purpose-built way to observe the pointer, and unlike a MouseArea
+          // it cannot consume a click meant for anything layered beneath the
+          // cover, whatever acceptedButtons is set to.
+          HoverHandler {
+            id: artHover
+          }
 
-                Text {
-                  text: sourceRow.sourceDetail
-                  color: root.mutedText(0.38)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                  width: parent.width
-                  visible: text !== ""
-                }
+        }
+
+        // --------------------------------------------------------- vinyl art
+        //
+        // Same artwork, presented as a record: the cover becomes the centre
+        // label, masked to a circle, on a grooved disc that turns while the
+        // track plays. Square remains the default because it shows the whole
+        // cover; the vinyl crops to a circle by nature.
+        Item {
+          id: vinylFrame
+          visible: root.vinylArtwork
+          anchors.horizontalCenter: parent.horizontalCenter
+          height: visible ? Math.min(Style.space(168), column.width) : 0
+          width: height
+
+          // A record is black, but a black disc on a near-black popup would be
+          // invisible, so the disc is pitched against the surface it sits on:
+          // lifted above a dark background, near-black on a light one. Same
+          // reasoning as mutedText -- derive from the surface, never hardcode.
+          readonly property color discColor: {
+            var bg = Color.popups.background
+            var lum = 0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b
+            return lum < 0.5 ? Qt.rgba(0.16, 0.16, 0.17, 1) : Qt.rgba(0.08, 0.08, 0.09, 1)
+          }
+          // Ring around the spindle hole. The disc carries no groove lines --
+          // the artwork fills it edge to edge and stays unbroken.
+          readonly property color grooveDark: Qt.rgba(0, 0, 0, 0.32)
+
+          Item {
+            id: disc
+            anchors.fill: parent
+
+            // Turns only while playing, and keeps its angle when paused so
+            // resuming continues from where it stopped rather than snapping.
+            RotationAnimation on rotation {
+              running: root.activePlayer !== null && !!root.activePlayer.isPlaying
+              loops: Animation.Infinite
+              from: 0
+              to: 360
+              duration: 9000
+            }
+
+            Rectangle {
+              anchors.fill: parent
+              radius: width / 2
+              color: vinylFrame.discColor
+              border.width: 1
+              border.color: Style.normalFillFor(root.bar.foreground, Color.accent)
+            }
+
+            // Artwork fills the whole disc, masked to the full circle --
+            // clip is rectangular in QML, so a radius alone will not round an
+            // image. The disc colour still shows through when a track has no
+            // cover, leaving a plain record rather than a hole.
+            Item {
+              id: discArt
+              anchors.fill: parent
+
+              layer.enabled: true
+              layer.effect: MultiEffect {
+                maskEnabled: true
+                maskSource: discMask
+                maskThresholdMin: 0.5
+                maskSpreadAtMin: 1.0
+              }
+
+              Image {
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+                cache: true
+                smooth: true
+                mipmap: true
+                source: root.artUrl
+                visible: status === Image.Ready && root.artUrl !== ""
               }
             }
 
-            MouseArea {
+            Item {
+              id: discMask
               anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: if (root.mediaService) root.mediaService.selectPlayer(root.mediaService.playerKey(sourceRow.player))
+              visible: false
+              layer.enabled: true
+
+              Rectangle {
+                anchors.fill: parent
+                radius: width / 2
+                color: "black"
+              }
+            }
+
+            // Spindle hole.
+            Rectangle {
+              anchors.centerIn: parent
+              width: disc.width * 0.055
+              height: width
+              radius: width / 2
+              color: Color.popups.background
+              border.width: 1
+              border.color: vinylFrame.grooveDark
+            }
+          }
+        }
+
+        // ---------------------------------------------------------- track text
+        Column {
+          width: parent.width
+          spacing: Style.space(2)
+
+          Text {
+            text: root.title || "Nothing playing"
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+            elide: Text.ElideRight
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+          }
+
+          Text {
+            text: root.artist
+            color: root.mutedText(0.26)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            elide: Text.ElideRight
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            visible: text !== ""
+          }
+
+          Text {
+            text: root.activePlayer && root.activePlayer.trackAlbum ? root.activePlayer.trackAlbum : ""
+            color: root.mutedText(0.43)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            visible: text !== ""
+          }
+        }
+
+        // ------------------------------------------------------------ seek bar
+        //
+        // Hidden entirely for players that report no length (most live streams),
+        // rather than showing a bar that can never fill. While dragging, the
+        // elapsed label follows the knob so you can see where you are landing.
+        Item {
+          id: seekBlock
+          width: parent.width
+          height: seekSlider.implicitHeight + timeRow.implicitHeight
+          visible: root.hasLength
+
+          PanelSlider {
+            id: seekSlider
+            bar: root.bar
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            minimum: 0
+            maximum: Math.max(1, root.trackLength)
+            step: 5
+            value: root.trackPosition
+            enabled: root.canSeek
+            opacity: root.canSeek ? 1.0 : 0.45
+            onReleased: function(value) {
+              if (root.mediaService) root.mediaService.seekToSeconds(value)
+            }
+          }
+
+          Row {
+            id: timeRow
+            anchors.top: seekSlider.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+
+            Text {
+              text: root.formatTime(seekSlider.dragging ? seekSlider.liveValue : root.trackPosition)
+              color: root.mutedText(0.32)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              width: parent.width / 2
+              horizontalAlignment: Text.AlignLeft
+            }
+
+            Text {
+              text: root.formatTime(root.trackLength)
+              color: root.mutedText(0.32)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              width: parent.width / 2
+              horizontalAlignment: Text.AlignRight
+            }
+          }
+        }
+
+        // ------------------------------------------------------------ controls
+        //
+        // Symmetric around play/pause: shuffle | prev | -10s | play | +10s |
+        // next | repeat. Shuffle and repeat flank the transport, and players
+        // that do not advertise support for a control are dimmed and inert
+        // rather than hidden, so the row does not reflow when you switch source.
+        Row {
+          id: controls
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: Style.space(2)
+
+          // One slot size for every button. Button derives its own size from
+          // icon plus padding, so the larger play glyph and its wider padding
+          // made that one button taller and the row read as ragged. Pinning
+          // width and height makes the row uniform; Button centres its content
+          // on both axes, so the bigger play icon still sits square in its slot.
+          readonly property real slot: Style.space(30)
+
+          Button {
+            width: controls.slot; height: controls.slot
+            iconText: "󰒝"
+            foreground: root.shuffleOn ? Color.accent : root.bar.foreground
+            enabled: root.shuffleSupported
+            opacity: !enabled ? 0.35 : (root.shuffleOn ? 1.0 : 0.6)
+            onClicked: if (root.mediaService) root.mediaService.toggleShuffle()
+          }
+
+          Button {
+            width: controls.slot; height: controls.slot
+            iconText: "󰒮"
+            foreground: root.bar.foreground
+            enabled: root.activePlayer && root.activePlayer.canGoPrevious
+            opacity: enabled ? 1.0 : 0.4
+            onClicked: if (root.mediaService) root.mediaService.runAction("previous", false, root.mediaService.playerKey(root.activePlayer))
+          }
+
+          Button {
+            width: controls.slot; height: controls.slot
+            iconText: "󰴪"
+            foreground: root.bar.foreground
+            enabled: root.canSeek
+            opacity: enabled ? 1.0 : 0.4
+            onClicked: if (root.mediaService) root.mediaService.seekBy(-10)
+          }
+
+          Button {
+            width: controls.slot; height: controls.slot
+            iconText: root.activePlayer && root.activePlayer.isPlaying ? "󰏤" : "󰐊"
+            foreground: root.bar.foreground
+            iconSize: Style.font.iconLarge
+            enabled: root.activePlayer && (root.activePlayer.canTogglePlaying || root.activePlayer.canPlay || root.activePlayer.canPause)
+            opacity: enabled ? 1.0 : 0.4
+            onClicked: if (root.mediaService) root.mediaService.runAction("playPause", false, root.mediaService.playerKey(root.activePlayer))
+          }
+
+          Button {
+            width: controls.slot; height: controls.slot
+            iconText: "󰵱"
+            foreground: root.bar.foreground
+            enabled: root.canSeek
+            opacity: enabled ? 1.0 : 0.4
+            onClicked: if (root.mediaService) root.mediaService.seekBy(10)
+          }
+
+          Button {
+            width: controls.slot; height: controls.slot
+            iconText: "󰒭"
+            foreground: root.bar.foreground
+            enabled: root.activePlayer && root.activePlayer.canGoNext
+            opacity: enabled ? 1.0 : 0.4
+            onClicked: if (root.mediaService) root.mediaService.runAction("next", false, root.mediaService.playerKey(root.activePlayer))
+          }
+
+          Button {
+            width: controls.slot; height: controls.slot
+            // repeat-off / repeat-all / repeat-one
+            iconText: root.loopLabel === "Repeat track" ? "󰑘"
+              : root.loopLabel === "Repeat all" ? "󰑖" : "󰑗"
+            foreground: root.loopLabel === "Repeat off" ? root.bar.foreground : Color.accent
+            enabled: root.loopSupported
+            opacity: !enabled ? 0.35 : (root.loopLabel === "Repeat off" ? 0.6 : 1.0)
+            onClicked: if (root.mediaService) root.mediaService.cycleLoop()
+          }
+        }
+
+        PanelSeparator {
+          visible: root.sourcePlayers.length > 1
+          foreground: root.bar.foreground
+        }
+
+        Column {
+          id: sourceList
+          visible: root.sourcePlayers.length > 1
+          width: parent.width
+          spacing: Style.space(4)
+
+          Repeater {
+            model: root.sourcePlayers
+
+            BorderSurface {
+              id: sourceRow
+              required property var modelData
+
+              readonly property var player: modelData
+              readonly property bool selected: root.activePlayer && player
+                && root.mediaService.playerKey(root.activePlayer) === root.mediaService.playerKey(player)
+              readonly property string sourceTitle: player ? (player.trackTitle || player.identity || player.desktopEntry || "Media source") : "Media source"
+              readonly property string sourceDetail: player && player.trackArtist ? player.trackArtist : (player && player.identity ? player.identity : "")
+
+              width: sourceList.width
+              height: sourceInner.implicitHeight + Style.space(10)
+              radius: Style.spacing.labelGap
+              color: selected ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
+              borderSpec: selected ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
+
+              Row {
+                id: sourceInner
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: sourceRow.borderLeft + Style.space(8)
+                anchors.rightMargin: sourceRow.borderRight + Style.space(8)
+                spacing: Style.space(8)
+
+                Text {
+                  text: sourceRow.player && sourceRow.player.isPlaying ? "󰏤" : "󰐊"
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.body
+                  width: Style.space(18)
+                  horizontalAlignment: Text.AlignHCenter
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Column {
+                  width: parent.width - Style.space(26)
+                  spacing: Style.space(1)
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    text: sourceRow.sourceTitle
+                    color: root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: sourceRow.selected
+                    elide: Text.ElideRight
+                    width: parent.width
+                  }
+
+                  Text {
+                    text: sourceRow.sourceDetail
+                    color: root.mutedText(0.38)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    width: parent.width
+                    visible: text !== ""
+                  }
+                }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (root.mediaService) root.mediaService.selectPlayer(root.mediaService.playerKey(sourceRow.player))
+              }
             }
           }
         }
       }
+
+      // ------------------------------------------------------------ settings
+      Column {
+        id: settingsView
+        visible: root.settingsOpen
+        width: parent.width
+        spacing: Style.space(8)
+
+        Text {
+          text: "Position on bar"
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+        }
+
+        ButtonGroup {
+          anchors.horizontalCenter: parent.horizontalCenter
+          options: [
+            { value: "left", label: "Left" },
+            { value: "center", label: "Center" },
+            { value: "right", label: "Right" }
+          ]
+          value: root.barSection
+          foreground: root.bar.foreground
+          background: root.bar.background
+          accent: Color.accent
+          fontFamily: root.bar.fontFamily
+          // The bar widget panels drive their own cursor and never hand Tab
+          // focus to a ButtonGroup; taking it here would trap Tab in the popup.
+          focusable: false
+          onChanged: function(section) { root.setBarSection(section) }
+        }
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "Moves the widget between bar sections. Dragging it on the bar does the same thing."
+          color: root.mutedText(0.38)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        PanelSeparator { foreground: root.bar.foreground }
+
+        Text {
+          text: "Popup artwork"
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+        }
+
+        ButtonGroup {
+          anchors.horizontalCenter: parent.horizontalCenter
+          options: [
+            { value: "square", label: "Square" },
+            { value: "vinyl", label: "Vinyl" }
+          ]
+          value: root.artworkStyle
+          foreground: root.bar.foreground
+          background: root.bar.background
+          accent: Color.accent
+          fontFamily: root.bar.fontFamily
+          focusable: false
+          onChanged: function(style) { root.setArtworkStyle(style) }
+        }
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "Square shows the whole cover. Vinyl spins the cover as a record label while playing."
+          color: root.mutedText(0.38)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
     }
   }
 }
