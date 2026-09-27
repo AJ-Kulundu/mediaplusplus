@@ -123,8 +123,14 @@ BarWidget {
   // shell's own config watcher.
   function setBarSection(section) {
     if (!bar || !section || section === root.barSection) return
-    bar.run("omarchy bar move " + bar.shellQuote(root.moduleName)
-            + " --section " + bar.shellQuote(section))
+    // Util.shellQuote, not bar.shellQuote. The bar README lists shellQuote
+    // among the helpers a widget gets off `bar`, but Bar.qml never defines
+    // it -- it lives on the qs.Commons Util singleton, which is what the
+    // first-party widgets call. Going through `bar` threw a TypeError and
+    // aborted this function before it ever ran the command, so picking a
+    // section silently did nothing.
+    bar.run("omarchy bar move " + Util.shellQuote(root.moduleName)
+            + " --section " + Util.shellQuote(section))
   }
 
   function close() { popupOpen = false; settingsOpen = false }
