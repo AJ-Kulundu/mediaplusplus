@@ -106,7 +106,8 @@ BarWidget {
   //
   //   space  play/pause      b  back 10s      f  forward 10s
   //   n      next track      p  previous      v  square <-> vinyl
-  //   m      cycle section   s  settings      esc close
+  //   m      cycle section   y  progress style s  settings
+  //   esc    close
   //
   // Matched on event.text rather than Qt.Key_* so the letters follow the
   // active keyboard layout instead of hard-coding a QWERTY scancode.
@@ -131,7 +132,13 @@ BarWidget {
     } else if (text === "m") {
       var order = ["left", "center", "right"]
       var at = order.indexOf(root.barSection)
-      root.setBarSection(order[(at < 0 ? 0 : at + 1) % order.length])
+      root.setBarSection(order[(at + 1) % order.length])
+    } else if (text === "y") {
+      // indexOf returns -1 for a value written by an older version, and -1 + 1
+      // lands on the first style, which is the right place to restart from.
+      var styles = root.progressStyles
+      var si = styles.indexOf(root.progressAnimation)
+      root.setProgressAnimation(styles[(si + 1) % styles.length])
     } else if (text === "v") {
       root.setArtworkStyle(root.vinylArtwork ? "square" : "vinyl")
     } else if (text === "s") {
@@ -147,17 +154,20 @@ BarWidget {
   // displayPosition rather than straight from the service, so the curve the
   // fill travels on is ours to choose; PanelSlider's own 140ms smoothing
   // rides on top of whichever we pick.
+  readonly property var progressStyles: ["default", "wiggle", "stripes"]
   readonly property string progressAnimation: String(setting("progressAnimation", "default"))
   readonly property bool wiggleProgress: progressAnimation === "wiggle"
+  readonly property bool stripesProgress: progressAnimation === "stripes"
+  // Both drawn styles share one bar body -- gap, remaining track, stop dot --
+  // and one Canvas, differing only in what that Canvas paints.
+  readonly property bool styledProgress: wiggleProgress || stripesProgress
 
-  readonly property int progressDuration: wiggleProgress ? 300 : 140
-  readonly property int progressEasing: wiggleProgress ? Easing.Bezier : Easing.OutCubic
+  readonly property int progressDuration: styledProgress ? 300 : 140
+  readonly property int progressEasing: styledProgress ? Easing.Bezier : Easing.OutCubic
 
   // Material's standard curve, cubic-bezier(0.4, 0, 0.2, 1). QML wants the
   // two control points plus the (1,1) endpoint.
-  // Material's standard curve, cubic-bezier(0.4, 0, 0.2, 1) -- the wiggle is
-  // Material 3 Expressive, so it keeps that motion.
-  readonly property var progressBezier: wiggleProgress
+  readonly property var progressBezier: styledProgress
     ? [0.4, 0.0, 0.2, 1.0, 1.0, 1.0] : []
 
   property real displayPosition: 0
@@ -182,8 +192,10 @@ BarWidget {
   }
 
   function setProgressAnimation(style) {
-    if (["default", "wiggle"].indexOf(style) === -1) return
+    if (root.progressStyles.indexOf(style) === -1) return
     if (style === root.progressAnimation) return
+
+    root.preservePopup()
 
     var entry = { id: root.moduleName }
     for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
@@ -238,6 +250,8 @@ BarWidget {
     if (style !== "square" && style !== "vinyl") return
     if (style === root.artworkStyle) return
 
+    root.preservePopup()
+
     var entry = { id: root.moduleName }
     for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
     entry.artworkStyle = style
@@ -250,7 +264,17 @@ BarWidget {
   // `omarchy bar move` owns the shell.json write and the relayout; going
   // through it keeps this popup from hand-editing the layout and racing the
   // shell's own config watcher.
-  // Consumed once, by the rebuilt widget, to put the popup back after a move.
+  // Every setter below writes shell.json, and the bar rebuilds this widget's
+  // slot when the config reloads -- which takes the popup with it. Changing a
+  // setting from inside the popup would therefore shut the popup, so the
+  // state is handed to the service first and picked up by the rebuilt widget.
+  function preservePopup() {
+    if (!root.popupOpen || !root.mediaService) return
+    root.mediaService.restorePopup = true
+    root.mediaService.restoreSettings = root.settingsOpen
+  }
+
+  // Consumed once, by the rebuilt widget, to put the popup back.
   function restorePopupIfRequested() {
     var svc = root.mediaService
     if (!svc || svc.restorePopup !== true) return
@@ -266,12 +290,7 @@ BarWidget {
   function setBarSection(section) {
     if (!bar || !section || section === root.barSection) return
 
-    // The move rebuilds this widget, so hand the popup state to the service
-    // before it goes.
-    if (root.popupOpen && root.mediaService) {
-      root.mediaService.restorePopup = true
-      root.mediaService.restoreSettings = root.settingsOpen
-    }
+    root.preservePopup()
     // Util.shellQuote, not bar.shellQuote. The bar README lists shellQuote
     // among the helpers a widget gets off `bar`, but Bar.qml never defines
     // it -- it lives on the qs.Commons Util singleton, which is what the
@@ -603,6 +622,7 @@ BarWidget {
           iconText: root.settingsOpen ? "󰝚" : "󰒓"
           foreground: root.bar.foreground
           opacity: root.settingsOpen ? 1.0 : 0.55
+          tooltipText: root.settingsOpen ? "Close settings  (s)" : "Settings  (s)"
           onClicked: root.settingsOpen = !root.settingsOpen
         }
       }
@@ -928,7 +948,7 @@ BarWidget {
         Item {
           id: seekBlock
           width: parent.width
-          readonly property real barArea: root.wiggleProgress
+          readonly property real barArea: root.styledProgress
             ? wiggleBar.height : seekSlider.implicitHeight
           height: barArea + timeRow.implicitHeight
           visible: root.hasLength
@@ -944,7 +964,7 @@ BarWidget {
             step: 5
             value: root.displayPosition
             enabled: root.canSeek
-            visible: !root.wiggleProgress
+            visible: !root.styledProgress
             opacity: root.canSeek ? 1.0 : 0.45
             onReleased: function(value) {
               if (root.mediaService) root.mediaService.seekToSeconds(value)
@@ -960,7 +980,7 @@ BarWidget {
           // press/drag seeking.
           Item {
             id: wiggleBar
-            visible: root.wiggleProgress
+            visible: root.styledProgress
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
@@ -1009,6 +1029,15 @@ BarWidget {
                 && !!root.activePlayer.isPlaying
               property real amplitude: active ? Style.space(3) : 0
               readonly property real wavelength: Style.space(20)
+              readonly property real stripeWidth: Style.space(6)
+
+              // Stripes read as a highlight over the accent, so they have to
+              // move away from it: lighten a dark accent, darken a light one.
+              readonly property color stripeColor: {
+                var a = Color.accent
+                var lum = 0.2126 * a.r + 0.7152 * a.g + 0.0722 * a.b
+                return lum > 0.6 ? Qt.rgba(0, 0, 0, 0.22) : Qt.rgba(1, 1, 1, 0.30)
+              }
 
               Behavior on amplitude { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
@@ -1030,6 +1059,10 @@ BarWidget {
 
               onPhaseChanged: if (visible) requestPaint()
               onAmplitudeChanged: if (visible) requestPaint()
+              Connections {
+                target: root
+                function onProgressAnimationChanged() { wave.requestPaint() }
+              }
               Component.onCompleted: requestPaint()
 
               Connections {
@@ -1045,7 +1078,43 @@ BarWidget {
                 if (end <= 0) return
 
                 var mid = height / 2
-                ctx.lineWidth = wiggleBar.barHeight
+                var h = wiggleBar.barHeight
+                var r = h / 2
+
+                if (root.stripesProgress) {
+                  // Barber-pole. Clip to the same rounded capsule the wiggle
+                  // ends in, fill it with the accent, then sweep diagonal
+                  // bands across it -- the clip is what keeps the bands from
+                  // spilling past the rounded ends.
+                  ctx.beginPath()
+                  ctx.moveTo(r, mid - r)
+                  ctx.lineTo(Math.max(r, end - r), mid - r)
+                  ctx.arc(Math.max(r, end - r), mid, r, -Math.PI / 2, Math.PI / 2)
+                  ctx.lineTo(r, mid + r)
+                  ctx.arc(r, mid, r, Math.PI / 2, -Math.PI / 2)
+                  ctx.closePath()
+                  ctx.clip()
+
+                  ctx.fillStyle = Color.accent
+                  ctx.fillRect(0, mid - r, end, h)
+
+                  var band = wave.stripeWidth
+                  var period = band * 2
+                  var shift = (wave.phase / (2 * Math.PI)) * period
+                  ctx.fillStyle = wave.stripeColor
+                  for (var sx = -h - period + shift; sx < end + h; sx += period) {
+                    ctx.beginPath()
+                    ctx.moveTo(sx, mid + r)
+                    ctx.lineTo(sx + h, mid - r)
+                    ctx.lineTo(sx + h + band, mid - r)
+                    ctx.lineTo(sx + band, mid + r)
+                    ctx.closePath()
+                    ctx.fill()
+                  }
+                  return
+                }
+
+                ctx.lineWidth = h
                 ctx.lineCap = "round"
                 ctx.lineJoin = "round"
                 ctx.strokeStyle = Color.accent
@@ -1150,6 +1219,7 @@ BarWidget {
             foreground: root.shuffleOn ? Color.accent : root.bar.foreground
             enabled: root.shuffleSupported
             opacity: !enabled ? 0.35 : (root.shuffleOn ? 1.0 : 0.6)
+            tooltipText: root.shuffleOn ? "Shuffle on" : "Shuffle off"
             onClicked: if (root.mediaService) root.mediaService.toggleShuffle()
           }
 
@@ -1159,6 +1229,7 @@ BarWidget {
             foreground: root.bar.foreground
             enabled: root.activePlayer && root.activePlayer.canGoPrevious
             opacity: enabled ? 1.0 : 0.4
+            tooltipText: "Previous  (p)"
             onClicked: if (root.mediaService) root.mediaService.runAction("previous", false, root.mediaService.playerKey(root.activePlayer))
           }
 
@@ -1168,6 +1239,7 @@ BarWidget {
             foreground: root.bar.foreground
             enabled: root.canSeek
             opacity: enabled ? 1.0 : 0.4
+            tooltipText: "Back 10s  (b)"
             onClicked: if (root.mediaService) root.mediaService.seekBy(-10)
           }
 
@@ -1178,6 +1250,7 @@ BarWidget {
             iconSize: Style.font.iconLarge
             enabled: root.activePlayer && (root.activePlayer.canTogglePlaying || root.activePlayer.canPlay || root.activePlayer.canPause)
             opacity: enabled ? 1.0 : 0.4
+            tooltipText: root.activePlayer && root.activePlayer.isPlaying ? "Pause  (space)" : "Play  (space)"
             onClicked: if (root.mediaService) root.mediaService.runAction("playPause", false, root.mediaService.playerKey(root.activePlayer))
           }
 
@@ -1187,6 +1260,7 @@ BarWidget {
             foreground: root.bar.foreground
             enabled: root.canSeek
             opacity: enabled ? 1.0 : 0.4
+            tooltipText: "Forward 10s  (f)"
             onClicked: if (root.mediaService) root.mediaService.seekBy(10)
           }
 
@@ -1196,6 +1270,7 @@ BarWidget {
             foreground: root.bar.foreground
             enabled: root.activePlayer && root.activePlayer.canGoNext
             opacity: enabled ? 1.0 : 0.4
+            tooltipText: "Next  (n)"
             onClicked: if (root.mediaService) root.mediaService.runAction("next", false, root.mediaService.playerKey(root.activePlayer))
           }
 
@@ -1207,6 +1282,7 @@ BarWidget {
             foreground: root.loopLabel === "Repeat off" ? root.bar.foreground : Color.accent
             enabled: root.loopSupported
             opacity: !enabled ? 0.35 : (root.loopLabel === "Repeat off" ? 0.6 : 1.0)
+            tooltipText: root.loopLabel
             onClicked: if (root.mediaService) root.mediaService.cycleLoop()
           }
         }
@@ -1373,7 +1449,7 @@ BarWidget {
         PanelSeparator { foreground: root.bar.foreground }
 
         Text {
-          text: "Progress animation"
+          text: "Progress animation (y)"
           color: root.bar.foreground
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -1382,14 +1458,17 @@ BarWidget {
 
         ButtonGroup {
           options: [
-            { value: "default", label: "Default" },
-            { value: "wiggle", label: "Wiggle" }
+            { value: "default", label: "Plain" },
+            { value: "wiggle", label: "Wiggle" },
+            { value: "stripes", label: "Stripes" }
           ]
           value: root.progressAnimation
           foreground: root.bar.foreground
           background: root.bar.background
           accent: Color.accent
           fontFamily: root.bar.fontFamily
+          // Three long labels overflow the narrowed popup at body size.
+          fontSize: Style.font.bodySmall
           focusable: false
           onChanged: function(style) { root.setProgressAnimation(style) }
         }
