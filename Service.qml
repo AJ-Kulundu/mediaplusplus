@@ -436,6 +436,14 @@ Item {
   // service exposes transport controls only; media++ adds track position,
   // seeking, shuffle/loop, and an audio-vs-video hint for the artwork frame.
 
+  // Moving the widget between bar sections destroys its slot and builds a
+  // new one, taking the popup with it. The intent to reopen therefore cannot
+  // live on the widget -- it has to outlive it, and the service does. Read
+  // and cleared exactly once by whichever instance gets there first, so a
+  // multi-monitor bar reopens one popup rather than one per screen.
+  property bool restorePopup: false
+  property bool restoreSettings: false
+
   // ---------------------------------------------------------------- position
   //
   // Quickshell only recomputes MprisPlayer.position when the player reports a

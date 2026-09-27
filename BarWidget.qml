@@ -106,7 +106,7 @@ BarWidget {
   //
   //   space  play/pause      b  back 10s      f  forward 10s
   //   n      next track      p  previous      v  square <-> vinyl
-  //   s      settings        esc close
+  //   m      cycle section   s  settings      esc close
   //
   // Matched on event.text rather than Qt.Key_* so the letters follow the
   // active keyboard layout instead of hard-coding a QWERTY scancode.
@@ -128,6 +128,10 @@ BarWidget {
       if (svc) svc.runAction("next", false)
     } else if (text === "p") {
       if (svc) svc.runAction("previous", false)
+    } else if (text === "m") {
+      var order = ["left", "center", "right"]
+      var at = order.indexOf(root.barSection)
+      root.setBarSection(order[(at < 0 ? 0 : at + 1) % order.length])
     } else if (text === "v") {
       root.setArtworkStyle(root.vinylArtwork ? "square" : "vinyl")
     } else if (text === "s") {
@@ -137,6 +141,57 @@ BarWidget {
     }
 
     event.accepted = handled
+  }
+
+  // Progress bar animation. The seek bar's value is fed from a local
+  // displayPosition rather than straight from the service, so the curve the
+  // fill travels on is ours to choose; PanelSlider's own 140ms smoothing
+  // rides on top of whichever we pick.
+  readonly property string progressAnimation: String(setting("progressAnimation", "default"))
+  readonly property bool wiggleProgress: progressAnimation === "wiggle"
+
+  readonly property int progressDuration: wiggleProgress ? 300 : 140
+  readonly property int progressEasing: wiggleProgress ? Easing.Bezier : Easing.OutCubic
+
+  // Material's standard curve, cubic-bezier(0.4, 0, 0.2, 1). QML wants the
+  // two control points plus the (1,1) endpoint.
+  // Material's standard curve, cubic-bezier(0.4, 0, 0.2, 1) -- the wiggle is
+  // Material 3 Expressive, so it keeps that motion.
+  readonly property var progressBezier: wiggleProgress
+    ? [0.4, 0.0, 0.2, 1.0, 1.0, 1.0] : []
+
+  property real displayPosition: 0
+  property bool progressStepping: true
+
+  // Ordinary playback advances the position by about a second at a time; a
+  // seek or a track change moves it by a lot. Animating the big jumps would
+  // send the fill gliding across the whole track, so only the small steps
+  // are animated and anything larger snaps.
+  onTrackPositionChanged: {
+    progressStepping = Math.abs(trackPosition - displayPosition) < 2.5
+    displayPosition = trackPosition
+  }
+
+  Behavior on displayPosition {
+    enabled: root.progressStepping
+    NumberAnimation {
+      duration: root.progressDuration
+      easing.type: root.progressEasing
+      easing.bezierCurve: root.progressBezier
+    }
+  }
+
+  function setProgressAnimation(style) {
+    if (["default", "wiggle"].indexOf(style) === -1) return
+    if (style === root.progressAnimation) return
+
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
+    entry.progressAnimation = style
+
+    root.settings = entry
+    if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
+      bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
   function formatTime(seconds) {
@@ -195,8 +250,28 @@ BarWidget {
   // `omarchy bar move` owns the shell.json write and the relayout; going
   // through it keeps this popup from hand-editing the layout and racing the
   // shell's own config watcher.
+  // Consumed once, by the rebuilt widget, to put the popup back after a move.
+  function restorePopupIfRequested() {
+    var svc = root.mediaService
+    if (!svc || svc.restorePopup !== true) return
+    svc.restorePopup = false
+    root.settingsOpen = svc.restoreSettings === true
+    svc.restoreSettings = false
+    root.popupOpen = true
+  }
+
+  Component.onCompleted: Qt.callLater(root.restorePopupIfRequested)
+  onMediaServiceChanged: Qt.callLater(root.restorePopupIfRequested)
+
   function setBarSection(section) {
     if (!bar || !section || section === root.barSection) return
+
+    // The move rebuilds this widget, so hand the popup state to the service
+    // before it goes.
+    if (root.popupOpen && root.mediaService) {
+      root.mediaService.restorePopup = true
+      root.mediaService.restoreSettings = root.settingsOpen
+    }
     // Util.shellQuote, not bar.shellQuote. The bar README lists shellQuote
     // among the helpers a widget gets off `bar`, but Bar.qml never defines
     // it -- it lives on the qs.Commons Util singleton, which is what the
@@ -422,6 +497,17 @@ BarWidget {
       else focusPrimeTimer.stop()
     }
 
+    // Re-run the prime. OnDemand keeps the pointer usable but does not hold
+    // keyboard focus against focus-follows-mouse: crossing any window on the
+    // way back to the popup hands focus to that window and the hotkeys go
+    // quiet. Re-priming when the pointer lands on the popup takes focus back,
+    // with the pointer-blocking Exclusive phase lasting only the 75ms below.
+    function reclaimFocus() {
+      if (!visible) return
+      focusPrimed = false
+      focusPrimeTimer.restart()
+    }
+
     Timer {
       id: focusPrimeTimer
       // Long enough for the surface to map and take focus, short enough that
@@ -449,7 +535,13 @@ BarWidget {
   // click-outside dismissal still works.
   HyprlandFocusGrab {
     active: root.popupOpen
-    windows: [keyWindow, popup]
+    // The bar belongs in here too. PopupCard's own grab listed the popup and
+    // its anchor window; dropping the anchor meant the pointer crossing the
+    // bar counted as "outside" and closed the popup out from under the click
+    // that was on its way to it.
+    windows: popup.anchorWindow
+      ? [keyWindow, popup, popup.anchorWindow]
+      : [keyWindow, popup]
     onCleared: root.close()
   }
 
@@ -461,6 +553,19 @@ BarWidget {
     // Its grab is replaced by the one above, which also covers keyWindow.
     triggerMode: "hover"
     open: root.popupOpen
+
+    // PopupCard's default property takes Items only, so the handler needs a
+    // host. Non-blocking and on top: it observes the pointer entering the
+    // popup without taking hover away from the buttons underneath.
+    Item {
+      anchors.fill: parent
+      z: 100
+
+      HoverHandler {
+        blocking: false
+        onHoveredChanged: if (hovered) keyWindow.reclaimFocus()
+      }
+    }
     contentWidth: popup.fittedContentWidth(Style.space(240))
     contentHeight: popup.fittedContentHeight(column.implicitHeight)
 
@@ -823,7 +928,9 @@ BarWidget {
         Item {
           id: seekBlock
           width: parent.width
-          height: seekSlider.implicitHeight + timeRow.implicitHeight
+          readonly property real barArea: root.wiggleProgress
+            ? wiggleBar.height : seekSlider.implicitHeight
+          height: barArea + timeRow.implicitHeight
           visible: root.hasLength
 
           PanelSlider {
@@ -835,22 +942,172 @@ BarWidget {
             minimum: 0
             maximum: Math.max(1, root.trackLength)
             step: 5
-            value: root.trackPosition
+            value: root.displayPosition
             enabled: root.canSeek
+            visible: !root.wiggleProgress
             opacity: root.canSeek ? 1.0 : 0.45
             onReleased: function(value) {
               if (root.mediaService) root.mediaService.seekToSeconds(value)
             }
           }
 
+          // Material 3 Expressive progress indicator. Choosing "wiggle"
+          // changes the shape as well as the curve: a wavy 4dp active
+          // indicator, a 4dp gap before the remaining track, and the stop
+          // indicator dot at the far end. PanelSlider cannot express any of
+          // that -- its track, fill and knob are fixed internally -- so this
+          // is a separate bar, shown instead of the slider, with its own
+          // press/drag seeking.
+          Item {
+            id: wiggleBar
+            visible: root.wiggleProgress
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: Style.space(18)
+            opacity: root.canSeek ? 1.0 : 0.45
+
+            readonly property real barHeight: Style.space(4)
+            readonly property real gap: Style.space(4)
+            readonly property real stopSize: Style.space(4)
+
+            property bool dragging: false
+            property real dragFraction: 0
+
+            readonly property real fraction: dragging ? dragFraction
+              : (root.trackLength > 0
+                 ? Math.min(1, Math.max(0, root.displayPosition / root.trackLength)) : 0)
+            readonly property real activeWidth: Math.round(fraction * width)
+
+            function fractionAt(x) {
+              return Math.min(1, Math.max(0, x / Math.max(1, width)))
+            }
+
+            // Remaining track, starting one gap past the active indicator and
+            // stopping short of the dot.
+            Rectangle {
+              x: Math.min(parent.width, wiggleBar.activeWidth + wiggleBar.gap)
+              width: Math.max(0, parent.width - x - wiggleBar.stopSize - wiggleBar.gap)
+              height: wiggleBar.barHeight
+              radius: height / 2
+              anchors.verticalCenter: parent.verticalCenter
+              color: Style.selectedFillFor(root.bar.foreground, Color.accent)
+            }
+
+            // Active indicator -- Material 3 Expressive's wiggle. Drawn
+            // on a Canvas because neither a Rectangle nor PanelSlider can
+            // describe a sine. The wave travels by advancing its phase, and
+            // the amplitude eases to zero when playback stops, so a paused
+            // track shows a flat bar exactly as it does in Material.
+            Canvas {
+              id: wave
+              anchors.fill: parent
+              antialiasing: true
+
+              property real phase: 0
+              readonly property bool active: root.activePlayer !== null
+                && !!root.activePlayer.isPlaying
+              property real amplitude: active ? Style.space(3) : 0
+              readonly property real wavelength: Style.space(20)
+
+              Behavior on amplitude { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+
+              NumberAnimation on phase {
+                // Always running, never stopped: `paused` may only be set on
+                // a running animation, and pausing rather than stopping is
+                // what keeps the wave's phase across a playback pause instead
+                // of snapping it back to zero. Repaints are gated on
+                // visibility below, so nothing is drawn when another progress
+                // style is selected.
+                running: true
+                paused: !wave.active
+                loops: Animation.Infinite
+                from: 0
+                to: 2 * Math.PI
+                duration: 1400
+                easing.type: Easing.Linear
+              }
+
+              onPhaseChanged: if (visible) requestPaint()
+              onAmplitudeChanged: if (visible) requestPaint()
+              Component.onCompleted: requestPaint()
+
+              Connections {
+                target: wiggleBar
+                function onActiveWidthChanged() { wave.requestPaint() }
+              }
+
+              onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+
+                var end = wiggleBar.activeWidth
+                if (end <= 0) return
+
+                var mid = height / 2
+                ctx.lineWidth = wiggleBar.barHeight
+                ctx.lineCap = "round"
+                ctx.lineJoin = "round"
+                ctx.strokeStyle = Color.accent
+                ctx.beginPath()
+
+                // Taper the last wavelength into the flat cap so the head of
+                // the wave meets the gap cleanly instead of being sliced
+                // mid-crest.
+                var taper = Math.max(1, wave.wavelength)
+                for (var x = 0; x <= end; x += 1) {
+                  var fade = Math.min(1, (end - x) / taper)
+                  var y = mid + wave.amplitude * fade
+                    * Math.sin((x / wave.wavelength) * 2 * Math.PI + wave.phase)
+                  if (x === 0) ctx.moveTo(x, y)
+                  else ctx.lineTo(x, y)
+                }
+                ctx.stroke()
+              }
+            }
+
+            // Stop indicator: the dot Material parks at the end of the track.
+            Rectangle {
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              width: wiggleBar.stopSize
+              height: wiggleBar.stopSize
+              radius: width / 2
+              color: Color.accent
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              enabled: root.canSeek
+              preventStealing: true
+              onPressed: function(mouse) {
+                wiggleBar.dragFraction = wiggleBar.fractionAt(mouse.x)
+                wiggleBar.dragging = true
+              }
+              onPositionChanged: function(mouse) {
+                if (wiggleBar.dragging)
+                  wiggleBar.dragFraction = wiggleBar.fractionAt(mouse.x)
+              }
+              onReleased: {
+                if (root.mediaService) root.mediaService.seekToFraction(wiggleBar.dragFraction)
+                wiggleBar.dragging = false
+              }
+              onCanceled: wiggleBar.dragging = false
+            }
+          }
+
           Row {
             id: timeRow
-            anchors.top: seekSlider.bottom
+            anchors.top: parent.top
+            anchors.topMargin: seekBlock.barArea
             anchors.left: parent.left
             anchors.right: parent.right
 
             Text {
-              text: root.formatTime(seekSlider.dragging ? seekSlider.liveValue : root.trackPosition)
+              text: root.formatTime(
+                wiggleBar.dragging ? wiggleBar.dragFraction * root.trackLength
+                : seekSlider.dragging ? seekSlider.liveValue
+                : root.trackPosition)
               color: root.mutedText(0.32)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -1063,7 +1320,7 @@ BarWidget {
         spacing: Style.space(8)
 
         Text {
-          text: "Position on bar"
+          text: "Position on bar (m)"
           color: root.bar.foreground
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -1071,7 +1328,6 @@ BarWidget {
         }
 
         ButtonGroup {
-          anchors.horizontalCenter: parent.horizontalCenter
           options: [
             { value: "left", label: "Left" },
             { value: "center", label: "Center" },
@@ -1088,19 +1344,11 @@ BarWidget {
           onChanged: function(section) { root.setBarSection(section) }
         }
 
-        Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          text: "Moves the widget between bar sections. Dragging it on the bar does the same thing."
-          color: root.mutedText(0.38)
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.caption
-        }
 
         PanelSeparator { foreground: root.bar.foreground }
 
         Text {
-          text: "Popup artwork"
+          text: "Popup artwork (v)"
           color: root.bar.foreground
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -1108,7 +1356,6 @@ BarWidget {
         }
 
         ButtonGroup {
-          anchors.horizontalCenter: parent.horizontalCenter
           options: [
             { value: "square", label: "Square" },
             { value: "vinyl", label: "Vinyl" }
@@ -1122,14 +1369,31 @@ BarWidget {
           onChanged: function(style) { root.setArtworkStyle(style) }
         }
 
+
+        PanelSeparator { foreground: root.bar.foreground }
+
         Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          text: "Square shows the whole cover. Vinyl spins the cover as a record label while playing."
-          color: root.mutedText(0.38)
+          text: "Progress animation"
+          color: root.bar.foreground
           font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
         }
+
+        ButtonGroup {
+          options: [
+            { value: "default", label: "Default" },
+            { value: "wiggle", label: "Wiggle" }
+          ]
+          value: root.progressAnimation
+          foreground: root.bar.foreground
+          background: root.bar.background
+          accent: Color.accent
+          fontFamily: root.bar.fontFamily
+          focusable: false
+          onChanged: function(style) { root.setProgressAnimation(style) }
+        }
+
       }
 
     }
