@@ -5,6 +5,7 @@ import Quickshell.Widgets
 import Quickshell.Wayland
 import qs.Ui
 import qs.Commons
+import "MediaModel.js" as MediaModel
 
 BarWidget {
   id: root
@@ -424,6 +425,13 @@ BarWidget {
 
         Text {
           id: labelText
+          // PlainText, not the Text.AutoText default. MPRIS metadata is not
+          // ours: browsers forward the MediaSession API straight through, so
+          // a web page picks this string. Left on AutoText, Qt sniffs it with
+          // Qt.mightBeRichText() and renders anything HTML-shaped as markup --
+          // a page could restyle the bar, or blow the label's height out past
+          // the slot the bar sized for it.
+          textFormat: Text.PlainText
           text: root.title + (root.artist ? "  ·  " + root.artist : "")
           color: root.bar.barForeground
           font.family: root.bar.fontFamily
@@ -432,6 +440,7 @@ BarWidget {
         }
 
         Text {
+          textFormat: Text.PlainText
           text: labelText.text
           visible: scrollClip.needsScroll
           color: labelText.color
@@ -480,7 +489,7 @@ BarWidget {
       if (!root.activePlayer) return
       root.popupOpen = !root.popupOpen
     }
-    onEntered: if (root.bar) root.bar.showTooltip(root, root.hasMedia ? (root.title + (root.artist ? " \u2014 " + root.artist : "")) : "")
+    onEntered: if (root.bar) root.bar.showTooltip(root, root.hasMedia ? MediaModel.plainText(root.title + (root.artist ? " \u2014 " + root.artist : "")) : "")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 
@@ -930,6 +939,7 @@ BarWidget {
           spacing: Style.space(2)
 
           Text {
+            textFormat: Text.PlainText
             text: root.title || "Nothing playing"
             color: root.bar.foreground
             font.family: root.bar.fontFamily
@@ -941,6 +951,7 @@ BarWidget {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: root.artist
             color: root.mutedText(0.26)
             font.family: root.bar.fontFamily
@@ -952,6 +963,7 @@ BarWidget {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: root.activePlayer && root.activePlayer.trackAlbum ? root.activePlayer.trackAlbum : ""
             color: root.mutedText(0.43)
             font.family: root.bar.fontFamily
@@ -1379,6 +1391,7 @@ BarWidget {
                   anchors.verticalCenter: parent.verticalCenter
 
                   Text {
+                    textFormat: Text.PlainText
                     text: sourceRow.sourceTitle
                     color: root.bar.foreground
                     font.family: root.bar.fontFamily
@@ -1389,6 +1402,7 @@ BarWidget {
                   }
 
                   Text {
+                    textFormat: Text.PlainText
                     text: sourceRow.sourceDetail
                     color: root.mutedText(0.38)
                     font.family: root.bar.fontFamily

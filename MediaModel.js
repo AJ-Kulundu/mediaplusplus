@@ -112,10 +112,19 @@ function labelFor(player) {
   return player.trackTitle || player.identity || player.desktopEntry || ""
 }
 
+// Strip the characters that make Qt.mightBeRichText() true. For text handed
+// to a Text item whose textFormat we cannot set -- the shared tooltip and the
+// OSD are both upstream and both left on Text.AutoText. Removing "<" is what
+// defeats tag detection; a lone "&" entity can still decode to a character,
+// which is a cosmetic difference, not a security property.
+function plainText(value) {
+  return String(value || "").replace(/[<>]/g, "")
+}
+
 function osdMessage(player, fallback) {
   if (!player) return fallback
-  var label = labelFor(player)
-  if (label && player.trackArtist) return label + " - " + player.trackArtist
+  var label = plainText(labelFor(player))
+  if (label && player.trackArtist) return label + " - " + plainText(player.trackArtist)
   return label || fallback
 }
 
@@ -211,6 +220,7 @@ if (typeof module !== "undefined") {
     trackChanged: trackChanged,
     labelFor: labelFor,
     osdMessage: osdMessage,
+    plainText: plainText,
     metadataValue: metadataValue,
     mediaKind: mediaKind,
     formatTime: formatTime,
