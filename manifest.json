@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ajkulundu.mediaplusplus",
   "name": "Media++",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "AJ Kulundu",
   "description": "MPRIS media control with seek bar, shuffle/repeat, and large cover art",
   "kinds": [

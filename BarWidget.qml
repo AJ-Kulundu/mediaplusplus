@@ -1,6 +1,9 @@
 import QtQuick
 import QtQuick.Effects
 import Quickshell
+import Quickshell.Widgets
+import Quickshell.Wayland
+import Quickshell.Hyprland
 import qs.Ui
 import qs.Commons
 
@@ -63,6 +66,77 @@ BarWidget {
                    fg.g + (bg.g - fg.g) * amount,
                    fg.b + (bg.b - fg.b) * amount,
                    fg.a)
+  }
+
+  // Icon for the app a player belongs to.
+  //
+  // Guessing an icon name from the player does not work: MPRIS desktopEntry
+  // is often empty (Brave leaves it blank) and the identity rarely matches
+  // the icon name (Brave's identity is "Brave", its icon is "brave-desktop").
+  // So resolve through the desktop entry database instead and read the icon
+  // off the entry -- id first, then the identity as a name match.
+  function appIconFor(player) {
+    if (!player) return ""
+
+    var entry = null
+    var id = String(player.desktopEntry || "")
+    if (id) entry = DesktopEntries.heuristicLookup(id)
+
+    var identity = String(player.identity || "").toLowerCase()
+    if (!entry && identity) entry = DesktopEntries.heuristicLookup(identity)
+
+    if (!entry && identity) {
+      var list = DesktopEntries.applications ? DesktopEntries.applications.values : []
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && String(list[i].name || "").toLowerCase() === identity) {
+          entry = list[i]
+          break
+        }
+      }
+    }
+
+    if (entry && entry.icon) {
+      var themed = Quickshell.iconPath(entry.icon, true)
+      if (themed) return themed
+    }
+    return Quickshell.iconPath("application-x-executable", true)
+  }
+
+  // Hotkeys, live only while the popup is open.
+  //
+  //   space  play/pause      b  back 10s      f  forward 10s
+  //   n      next track      p  previous      v  square <-> vinyl
+  //   s      settings        esc close
+  //
+  // Matched on event.text rather than Qt.Key_* so the letters follow the
+  // active keyboard layout instead of hard-coding a QWERTY scancode.
+  function handleKey(event) {
+    if (!root.popupOpen) return
+    var svc = root.mediaService
+    var text = String(event.text || "").toLowerCase()
+    var handled = true
+
+    if (event.key === Qt.Key_Space) {
+      if (svc) svc.runAction("playPause", false)
+    } else if (event.key === Qt.Key_Escape) {
+      root.close()
+    } else if (text === "b") {
+      if (svc) svc.seekBy(-10)
+    } else if (text === "f") {
+      if (svc) svc.seekBy(10)
+    } else if (text === "n") {
+      if (svc) svc.runAction("next", false)
+    } else if (text === "p") {
+      if (svc) svc.runAction("previous", false)
+    } else if (text === "v") {
+      root.setArtworkStyle(root.vinylArtwork ? "square" : "vinyl")
+    } else if (text === "s") {
+      root.settingsOpen = !root.settingsOpen
+    } else {
+      handled = false
+    }
+
+    event.accepted = handled
   }
 
   function formatTime(seconds) {
@@ -277,7 +351,7 @@ BarWidget {
       // second copy sits exactly where the first began.
       SequentialAnimation {
         id: scrollAnim
-        running: scrollClip.needsScroll && !root.popupOpen && !root.bar.vertical
+        running: scrollClip.needsScroll && !root.bar.vertical
         loops: Animation.Infinite
 
         PauseAnimation { duration: root.scrollPauseMs }
@@ -312,13 +386,59 @@ BarWidget {
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 
+  // Keyboard focus for the popup hotkeys.
+  //
+  // PopupCard is a PopupWindow anchored to the bar, and Bar.qml declares its
+  // layer surface as keyboardFocus: None -- so no key ever reaches the popup,
+  // focus grab or not. That is not a guess: with a key handler inside the
+  // popup, pressing keys produced zero events. The first-party panels avoid
+  // this by being KeyboardPanel layer surfaces that take focus while open.
+  // Rather than refactor this popup into one, this is a 1x1 overlay whose
+  // only job is to hold keyboard focus while the popup is open. Its mask is
+  // empty, so it is entirely click-through and cannot disturb the popup's
+  // own click-outside dismissal.
+  PanelWindow {
+    id: keyWindow
+    visible: root.popupOpen
+    color: "transparent"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "mediaplusplus-keys"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: root.popupOpen
+      ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    anchors { top: true; left: true }
+    implicitWidth: 1
+    implicitHeight: 1
+    mask: Region {}
+
+    Item {
+      anchors.fill: parent
+      focus: true
+      Keys.onPressed: function(event) { root.handleKey(event) }
+    }
+  }
+
+  // Taking keyboard focus clears PopupCard's own focus grab, and its grab
+  // closes the popup when cleared -- so simply adding a focused surface made
+  // the popup shut the instant it opened. The fix is to own the grab here
+  // instead: PopupCard's is disabled (triggerMode "hover"), and this one
+  // lists both surfaces, so focus moving between them is not "outside" and
+  // click-outside dismissal still works.
+  HyprlandFocusGrab {
+    active: root.popupOpen
+    windows: [keyWindow, popup]
+    onCleared: root.close()
+  }
+
   PopupCard {
     id: popup
     anchorItem: root
     bar: root.bar
     owner: root
+    // Its grab is replaced by the one above, which also covers keyWindow.
+    triggerMode: "hover"
     open: root.popupOpen
-    contentWidth: popup.fittedContentWidth(Style.space(300))
+    contentWidth: popup.fittedContentWidth(Style.space(240))
     contentHeight: popup.fittedContentHeight(column.implicitHeight)
 
     Column {
@@ -380,7 +500,7 @@ BarWidget {
           readonly property real aspect: ready
             ? artImage.sourceSize.width / artImage.sourceSize.height
             : (root.isVideo ? 16 / 9 : 1)
-          readonly property real maxHeight: Style.space(168)
+          readonly property real maxHeight: Style.space(134)
 
           visible: !root.vinylArtwork
           anchors.horizontalCenter: parent.horizontalCenter
@@ -518,7 +638,7 @@ BarWidget {
           id: vinylFrame
           visible: root.vinylArtwork
           anchors.horizontalCenter: parent.horizontalCenter
-          height: visible ? Math.min(Style.space(168), column.width) : 0
+          height: visible ? Math.min(Style.space(134), column.width) : 0
           width: height
 
           // A record is black, but a black disc on a near-black popup would be
@@ -538,14 +658,23 @@ BarWidget {
             id: disc
             anchors.fill: parent
 
-            // Turns only while playing, and keeps its angle when paused so
-            // resuming continues from where it stopped rather than snapping.
+            // Paused, not stopped. Toggling `running` restarts the animation,
+            // and a restart jumps straight back to `from: 0` -- so every
+            // pause/resume snapped the record upright instead of picking up
+            // where it left off. Holding it running and flipping `paused`
+            // keeps the angle, so resuming continues from the exact frame it
+            // stopped on. Easing and direction are pinned rather than left to
+            // defaults: any curve other than linear would make the disc surge
+            // and slow once per revolution.
             RotationAnimation on rotation {
-              running: root.activePlayer !== null && !!root.activePlayer.isPlaying
+              running: true
+              paused: !(root.activePlayer && root.activePlayer.isPlaying)
               loops: Animation.Infinite
               from: 0
               to: 360
-              duration: 9000
+              duration: 18000
+              direction: RotationAnimation.Clockwise
+              easing.type: Easing.Linear
             }
 
             Rectangle {
@@ -554,6 +683,9 @@ BarWidget {
               color: vinylFrame.discColor
               border.width: 1
               border.color: Style.normalFillFor(root.bar.foreground, Color.accent)
+              // A curved edge in motion shows its stair-stepping far more
+              // than a static one; QML leaves this off by default.
+              antialiasing: true
             }
 
             // Artwork fills the whole disc, masked to the full circle --
@@ -568,8 +700,11 @@ BarWidget {
               layer.effect: MultiEffect {
                 maskEnabled: true
                 maskSource: discMask
-                maskThresholdMin: 0.5
-                maskSpreadAtMin: 1.0
+                // A narrow spread around the threshold feathers the rim by a
+                // pixel. A hard cut reads as a jagged edge once the disc is
+                // turning, which is exactly where it is most visible.
+                maskThresholdMin: 0.48
+                maskSpreadAtMin: 0.08
               }
 
               Image {
@@ -579,6 +714,12 @@ BarWidget {
                 cache: true
                 smooth: true
                 mipmap: true
+                // Covers arrive around 600px and land in a ~155px disc. Left
+                // to scale the full-size decode every frame, the fine detail
+                // crawls and sparkles as the record turns; decoding near the
+                // drawn size lets Qt filter it once instead.
+                sourceSize.width: Math.round(vinylFrame.width * 2)
+                sourceSize.height: Math.round(vinylFrame.height * 2)
                 source: root.artUrl
                 visible: status === Image.Ready && root.artUrl !== ""
               }
@@ -594,6 +735,7 @@ BarWidget {
                 anchors.fill: parent
                 radius: width / 2
                 color: "black"
+                antialiasing: true
               }
             }
 
@@ -606,6 +748,7 @@ BarWidget {
               color: Color.popups.background
               border.width: 1
               border.color: vinylFrame.grooveDark
+              antialiasing: true
             }
           }
         }
@@ -818,13 +961,27 @@ BarWidget {
               color: selected ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
               borderSpec: selected ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
 
+              // The app icon is anchored to the row's right edge and the text
+              // Row stops short of it, so a long title elides against the icon
+              // instead of sliding underneath it.
+              IconImage {
+                id: appIcon
+                anchors.right: parent.right
+                anchors.rightMargin: sourceRow.borderRight + Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                implicitSize: Style.space(18)
+                source: root.appIconFor(sourceRow.player)
+                visible: source !== ""
+                opacity: sourceRow.selected ? 1.0 : 0.75
+              }
+
               Row {
                 id: sourceInner
                 anchors.left: parent.left
-                anchors.right: parent.right
+                anchors.right: appIcon.visible ? appIcon.left : parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: sourceRow.borderLeft + Style.space(8)
-                anchors.rightMargin: sourceRow.borderRight + Style.space(8)
+                anchors.rightMargin: appIcon.visible ? Style.space(8) : sourceRow.borderRight + Style.space(8)
                 spacing: Style.space(8)
 
                 Text {
