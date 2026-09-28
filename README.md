@@ -1,27 +1,10 @@
 # Media++
 
 An Omarchy shell media plugin. It does everything `omarchy.media` does, plus
-seeking, shuffle and repeat, a settings panel, hotkeys, and two ways of drawing
-the artwork and the progress bar.
+seeking, volume, shuffle and repeat, a settings panel, hotkeys, and two ways of
+drawing the artwork and the progress bar.
 
 ![Media++](preview.png)
-
-## What it adds over the stock media plugin
-
-| | Stock | Media++ |
-|---|---|---|
-| Seeking | — | Scrub bar, ±10s buttons, `seekTo`/`seekPercent` over IPC |
-| Shuffle / repeat | — | Both, with per-player support detection |
-| Artwork | Fixed square thumbnail | Aspect-driven frame, or a spinning vinyl |
-| Progress bar | — | Plain, Material 3 Expressive wiggle, or barber-pole stripes |
-| Settings | — | In-popup panel: bar position, artwork, progress style |
-| Hotkeys | — | Global summon, plus transport keys while the popup is open |
-| Bar label | Resizes with the title | Fixed width, continuous carousel |
-| Source list | Title only | App icon per source |
-
-It also fixes two things the stock plugin gets wrong: the bar label can strand
-itself off-screen and vanish, and secondary text inverts its contrast on light
-themes, ending up louder than the title above it.
 
 ## Install
 
@@ -31,6 +14,68 @@ omarchy plugin enable ajkulundu.mediaplusplus
 ```
 
 Requires a Nerd Font for the transport glyphs — Omarchy ships one.
+
+### Removing it
+
+```bash
+omarchy plugin disable ajkulundu.mediaplusplus   # stop loading it, keep the checkout
+omarchy plugin remove ajkulundu.mediaplusplus    # delete the checkout as well
+```
+
+Media++ is a clone of the first-party `omarchy.media`, so disabling or removing
+it puts the stock plugin back into the same bar slot rather than leaving a gap:
+the layout entry's id flips to `omarchy.media` and the built-in is re-enabled
+for you. The inline settings on that entry are left untouched.
+
+Either way, plugin changes only take effect on the next shell start:
+
+```bash
+omarchy restart shell
+```
+
+That restart is also what reclaims the memory — Qt caches compiled QML for the
+life of the process, so disabling alone frees nothing.
+
+## Bind the summon key
+
+Media++ does not claim a global shortcut for you. Bind one yourself, in
+`~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + ALT + M", "Media controls", "omarchy-shell shell toggle ajkulundu.mediaplusplus")
+```
+
+That toggles the popup on the focused monitor. Every key in the next section
+works while the popup is open.
+
+## Features and hotkeys
+
+| | Stock | Media++ | Key |
+|---|---|---|---|
+| Play / pause | ✓ | ✓ | `space` |
+| Previous / next track | ✓ | ✓ | `p` / `n` |
+| Seeking | — | Scrub bar, ± buttons, `seekTo`/`seekPercent` over IPC | `b` / `f`, `←` / `→` |
+| Volume | — | Slider in the popup, `volume`/`volumeUp`/`volumeDown` over IPC | `↑` / `↓` |
+| Shuffle | — | With per-player support detection | `x` |
+| Repeat | — | Off · all · track | `r` |
+| Source switching | Title only | App icon per source, click a row to switch | `[` / `]` |
+| Raise the player | — | Click the cover to focus the player's own window | `o` |
+| Artwork | Fixed square thumbnail | Aspect-driven frame, or a spinning vinyl | `v` |
+| Progress bar | — | Plain, Material 3 Expressive wiggle, or barber-pole stripes | `y` |
+| Position on bar | — | Left · center · right | `m` |
+| Settings panel | — | In-popup: bar position, artwork, progress style | `s` |
+| Close the popup | — | — | `esc` |
+| Bar label | Resizes with the title | Fixed width, continuous carousel | — |
+
+Keys are matched on the character, so they follow your keyboard layout. Seek
+and volume repeat when held; everything else acts once per press, so leaning on
+`space` will not machine-gun play/pause.
+
+It also fixes several things the stock plugin gets wrong: the bar label can
+strand itself off-screen and vanish; secondary text inverts its contrast on
+light themes, ending up louder than the title above it; and a player that has
+stopped but still advertises stale cover art outranks one holding a real
+paused track, which hides the widget entirely.
 
 ## Bar widget
 
@@ -43,9 +88,15 @@ track.
 ## Popup
 
 Artwork, track metadata, a scrub bar with elapsed and total time, and a
-transport row: shuffle · previous · −10s · play/pause · +10s · next · repeat.
-Controls a player does not support are dimmed rather than hidden. When more
-than one player is running, each appears in a list below with its app icon.
+transport row: shuffle · previous · back · play/pause · forward · next · repeat.
+Below it, a volume slider for players that implement MPRIS Volume — browsers
+route through PipeWire instead and report no support, so the row is hidden for
+them rather than showing a slider that does nothing.
+
+Controls a player does not support are dimmed rather than hidden. Clicking the
+cover asks the player to bring its own window forward. When more than one
+player is running, each appears in a list below with its app icon; the list
+scrolls once it is taller than a few rows rather than growing the popup.
 
 ## Settings
 
@@ -66,40 +117,15 @@ Anything not exposed in the panel is an inline field on the widget's entry in
 
 ```json
 { "id": "ajkulundu.mediaplusplus",
-  "labelWidth": 136, "scrollSpeed": 0.6, "scrollPause": 5,
+  "labelWidth": 136, "scrollSpeed": 0.6, "scrollPause": 5, "seekStep": 10,
   "artworkStyle": "square", "progressAnimation": "default" }
 ```
 
 `labelWidth` is the bar label width, `scrollSpeed` multiplies the carousel pace
-(below 1 is slower), `scrollPause` is the hold between passes in seconds.
-
-## Hotkeys
-
-Bind the summon key yourself, in `~/.config/hypr/bindings.lua`:
-
-```lua
-o.bind("SUPER + ALT + M", "Media controls", "omarchy-shell shell toggle ajkulundu.mediaplusplus")
-```
-
-The rest work while the popup is open:
-
-| Key | |
-|---|---|
-| `space` | Play / pause |
-| `b` / `f` | Back / forward 10s |
-| `p` / `n` | Previous / next track |
-| `m` | Cycle bar position |
-| `v` | Square ⇄ vinyl |
-| `y` | Cycle progress style |
-| `s` | Settings |
-| `esc` | Close |
-
-Keys are matched on the character, so they follow your keyboard layout.
-
-**Known limitation.** Hotkeys work from when the popup opens until keyboard
-focus drifts elsewhere — under `focus_follows_mouse` that is any window the
-pointer crosses. The popup is an xdg popup, and only a full-screen layer
-surface can hold focus the way the stock panels do. Reopening restores them.
+(below 1 is slower), `scrollPause` is the hold between passes in seconds, and
+`seekStep` is how far the ± buttons and `b`/`f` jump. `seekStep` is one of 5,
+10, 15 or 30 — anything else snaps to the nearest, so the button icon always
+shows the number it actually seeks.
 
 ## IPC
 
@@ -111,14 +137,39 @@ omarchy-shell media seekTo 90     # absolute seconds
 omarchy-shell media seekPercent 50
 omarchy-shell media shuffle
 omarchy-shell media loop          # off -> all -> track
+omarchy-shell media volume 60     # percent
+omarchy-shell media volumeUp      # 5% steps
+omarchy-shell media volumeDown
+omarchy-shell media raise         # focus the player's own window
 omarchy-shell media sourceNext
 ```
 
+`status` also reports `volume`, `volumeSupported` and `canRaise`.
+
 ## Dismissal
 
-The popup closes on `esc`, on clicking the bar widget, on the summon hotkey,
-or shortly after the pointer leaves it — but only once the pointer has actually
-been on it, so opening by hotkey with the mouse elsewhere stays put.
+The popup closes on `esc`, on clicking outside it, on clicking the bar widget,
+on the summon hotkey, or shortly after the pointer leaves it — but only once the
+pointer has actually been on it, so opening by hotkey with the mouse elsewhere
+stays put.
+
+The popup is a full-screen layer surface, which is what lets it hold keyboard
+focus for as long as it is open. Earlier versions anchored an xdg popup to the
+bar and borrowed focus through a 1×1 helper surface; that surface could win
+focus but not keep it, so the hotkeys went dead roughly 75 ms after opening and
+keys fell through to whatever was behind — which, with a browser there, meant
+`space` and `f` hit YouTube instead. Holding focus properly also means
+`focus_follows_mouse` no longer steals the hotkeys when the pointer wanders.
+
+## Tests
+
+The selection, stream-matching and formatting logic lives in `MediaModel.js`,
+which is deliberately free of QML imports — enum values are passed in by the
+caller — so it runs outside a shell:
+
+```bash
+node MediaModel.test.js
+```
 
 ## Credit
 

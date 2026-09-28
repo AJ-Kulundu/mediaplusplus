@@ -10,6 +10,12 @@ Item {
 
   property var shell: null
   property string preferredPlayerKey: ""
+  // Whether preferredPlayerKey was chosen by the user (a click on a source
+  // row, or a source-cycle) rather than inferred from what happens to be
+  // playing. An inferred preference yields to the playing-player heuristic;
+  // an explicit one outranks it, or clicking a paused source while something
+  // else plays would visibly do nothing at all.
+  property bool preferredIsExplicit: false
   property var playerStartedAt: ({})
   property var pendingTrackOsd: null
   property int playSerial: 0
@@ -20,7 +26,7 @@ Item {
     var list = []
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i]
-      if (n && n.isStream && isPlaybackStream(n) && n.audio) list.push(n)
+      if (n && n.isStream && MediaModel.isPlaybackStream(n) && n.audio) list.push(n)
     }
     return list
   }
@@ -34,52 +40,15 @@ Item {
   readonly property string artUrl: activePlayer && activePlayer.trackArtUrl ? activePlayer.trackArtUrl : ""
   readonly property string identity: activePlayer ? (activePlayer.identity || activePlayer.desktopEntry || "") : ""
 
-  function isProxyPlayer(player) {
-    return MediaModel.isProxyPlayer(player)
-  }
-
-  function hasMetadata(player) {
-    return MediaModel.hasMetadata(player)
-  }
-
-  function hasTrackMetadata(player) {
-    return MediaModel.hasTrackMetadata(player)
-  }
-
-  function playerCanControl(player) {
-    return MediaModel.playerCanControl(player)
-  }
-
-  function canHandleAction(player, action) {
-    return MediaModel.canHandleAction(player, action)
-  }
-
-  function canCycleSource(player) {
-    return MediaModel.canCycleSource(player)
-  }
-
-  function nodeProps(node) {
-    return MediaModel.nodeProps(node)
-  }
-
-  function isPlaybackStream(node) {
-    return MediaModel.isPlaybackStream(node)
-  }
-
-  function streamLabelKey(label) {
-    return MediaModel.streamLabelKey(label)
-  }
-
-  function rawStreamLabel(node) {
-    return MediaModel.rawStreamLabel(node)
-  }
-
-  function playerAppLabel(player) {
-    return MediaModel.playerAppLabel(player)
-  }
-
+  // The only adapters left are the ones that bind something this file owns:
+  // playbackStreams for the stream match, and the Stopped enum for the
+  // playback ranking. Everything else calls MediaModel directly.
   function playerHasPlaybackStream(player) {
     return MediaModel.playerHasPlaybackStream(player, playbackStreams)
+  }
+
+  function betterPlayer(current, candidate) {
+    return MediaModel.preferByPlayback(current, candidate, MprisPlaybackState.Stopped)
   }
 
   function playerKey(player) {
@@ -117,12 +86,19 @@ Item {
       if (playerStartedAt[key] === undefined) {
         serial += 1
         next[key] = serial
+        // Something new started playing. That takes the spotlight back from
+        // an explicit pick -- otherwise choosing a source once would pin the
+        // popup to it forever.
+        if (key !== preferredPlayerKey) preferredIsExplicit = false
       } else {
         next[key] = playerStartedAt[key]
       }
     }
 
-    if (preferredPlayerKey && !alive[preferredPlayerKey]) preferredPlayerKey = ""
+    if (preferredPlayerKey && !alive[preferredPlayerKey]) {
+      preferredPlayerKey = ""
+      preferredIsExplicit = false
+    }
 
     playSerial = serial
     playerStartedAt = next
@@ -132,17 +108,17 @@ Item {
     var list = []
     for (var i = 0; i < players.length; i++) {
       var p = players[i]
-      if (hasMetadata(p)) list.push(p)
+      if (MediaModel.hasMetadata(p)) list.push(p)
     }
 
     list.sort(function(a, b) {
       if (!!a.isPlaying !== !!b.isPlaying) return a.isPlaying ? -1 : 1
-      if (isProxyPlayer(a) !== isProxyPlayer(b)) return isProxyPlayer(a) ? 1 : -1
+      if (MediaModel.isProxyPlayer(a) !== MediaModel.isProxyPlayer(b)) return MediaModel.isProxyPlayer(a) ? 1 : -1
       if (a.isPlaying && b.isPlaying) {
         var orderDelta = playerOrder(a, 1000) - playerOrder(b, 1000)
         if (orderDelta !== 0) return orderDelta
       }
-      return labelFor(a).localeCompare(labelFor(b))
+      return MediaModel.labelFor(a).localeCompare(MediaModel.labelFor(b))
     })
 
     return list
@@ -152,12 +128,12 @@ Item {
     var list = []
     for (var i = 0; i < players.length; i++) {
       var p = players[i]
-      if (canCycleSource(p)) list.push(p)
+      if (MediaModel.canCycleSource(p)) list.push(p)
     }
 
     list.sort(function(a, b) {
-      if (isProxyPlayer(a) !== isProxyPlayer(b)) return isProxyPlayer(a) ? 1 : -1
-      return labelFor(a).localeCompare(labelFor(b))
+      if (MediaModel.isProxyPlayer(a) !== MediaModel.isProxyPlayer(b)) return MediaModel.isProxyPlayer(a) ? 1 : -1
+      return MediaModel.labelFor(a).localeCompare(MediaModel.labelFor(b))
     })
 
     return list
@@ -173,7 +149,7 @@ Item {
       var p = players[i]
       if (!p) continue
 
-      var proxyPlayer = isProxyPlayer(p)
+      var proxyPlayer = MediaModel.isProxyPlayer(p)
       if (p.isPlaying) {
         if (requirePlaybackStream && !playerHasPlaybackStream(p)) continue
 
@@ -206,48 +182,42 @@ Item {
       var p = players[i]
       if (!p) continue
 
-      var proxy = isProxyPlayer(p)
+      var proxy = MediaModel.isProxyPlayer(p)
 
-      if (preferredPlayerKey && playerKey(p) === preferredPlayerKey && hasMetadata(p)) preferred = p
+      if (preferredPlayerKey && playerKey(p) === preferredPlayerKey && MediaModel.hasMetadata(p)) preferred = p
 
+      // Within a bucket, rank by playback state instead of letting iteration
+      // order decide. Two browsers and a music player all land in the same
+      // bucket, and the one still holding a track should win over one that
+      // has stopped.
       if (playerHasPlaybackStream(p)) {
-        if (!proxy && !streamPlayer) streamPlayer = p
-        else if (proxy && !streamProxy) streamProxy = p
-      } else if (hasTrackMetadata(p)) {
-        if (!proxy && !trackPlayer) trackPlayer = p
-        else if (proxy && !trackProxy) trackProxy = p
-      } else if (playerCanControl(p)) {
-        if (!proxy && !controllablePlayer) controllablePlayer = p
-        else if (proxy && !controllableProxy) controllableProxy = p
-      } else if (hasMetadata(p)) {
-        if (!proxy && !identityPlayer) identityPlayer = p
-        else if (proxy && !identityProxy) identityProxy = p
+        if (!proxy) streamPlayer = betterPlayer(streamPlayer, p)
+        else streamProxy = betterPlayer(streamProxy, p)
+      } else if (MediaModel.hasTrackMetadata(p)) {
+        if (!proxy) trackPlayer = betterPlayer(trackPlayer, p)
+        else trackProxy = betterPlayer(trackProxy, p)
+      } else if (MediaModel.playerCanControl(p)) {
+        if (!proxy) controllablePlayer = betterPlayer(controllablePlayer, p)
+        else controllableProxy = betterPlayer(controllableProxy, p)
+      } else if (MediaModel.hasMetadata(p)) {
+        if (!proxy) identityPlayer = betterPlayer(identityPlayer, p)
+        else identityProxy = betterPlayer(identityProxy, p)
       }
     }
 
-    if (preferred && preferred.isPlaying) return preferred
+    // An explicit pick wins outright; an inferred one still has to be playing
+    // before it beats whatever else is.
+    if (preferred && (preferred.isPlaying || preferredIsExplicit)) return preferred
     var streamCandidate = streamPlayer || streamProxy
     var streamPreferred = preferred && playerHasPlaybackStream(preferred) ? preferred : null
     return oldestPlayingPlayer(true) || oldestPlayingPlayer(false) || streamPreferred || streamCandidate || preferred || trackPlayer || trackProxy || controllablePlayer || controllableProxy || identityPlayer || identityProxy || null
-  }
-
-  function labelFor(player) {
-    return MediaModel.labelFor(player)
-  }
-
-  function osdMessage(player, fallback) {
-    return MediaModel.osdMessage(player, fallback)
-  }
-
-  function trackSignature(player) {
-    return MediaModel.trackSignature(player)
   }
 
   function showOsd(actionLabel, iconName, player) {
     if (!shell) return
     shell.summon("omarchy.osd", JSON.stringify({
       icon: iconName || "media",
-      message: osdMessage(player || activePlayer, actionLabel)
+      message: MediaModel.osdMessage(player || activePlayer, actionLabel)
     }))
   }
 
@@ -286,8 +256,9 @@ Item {
 
   function selectPlayer(key) {
     var player = playerForKey(key)
-    if (!player || !hasMetadata(player)) return false
+    if (!player || !MediaModel.hasMetadata(player)) return false
     preferredPlayerKey = playerKey(player)
+    preferredIsExplicit = true
     return true
   }
 
@@ -334,6 +305,7 @@ Item {
     var nextKey = playerKey(next)
 
     preferredPlayerKey = nextKey
+    preferredIsExplicit = true
 
     if (transferPlayback && currentWasPlaying && next && nextKey !== currentKey) {
       var nextWasPlaying = next.isPlaying
@@ -357,11 +329,11 @@ Item {
       if (oldest) return oldest
     }
 
-    if (canHandleAction(activePlayer, action)) return activePlayer
+    if (MediaModel.canHandleAction(activePlayer, action)) return activePlayer
 
     var list = sourcePlayers
     for (var i = 0; i < list.length; i++) {
-      if (canHandleAction(list[i], action)) return list[i]
+      if (MediaModel.canHandleAction(list[i], action)) return list[i]
     }
 
     return activePlayer
@@ -372,7 +344,7 @@ Item {
     var key = playerKey(player)
     var actionLabel = "Play/pause"
     var iconName = "media"
-    var beforeTrackSignature = trackSignature(player)
+    var beforeTrackSignature = MediaModel.trackSignature(player)
     var handled = false
 
     if (action === "next") {
@@ -424,7 +396,10 @@ Item {
       }
     }
 
-    if (handled && key) preferredPlayerKey = key
+    if (handled && key) {
+      preferredPlayerKey = key
+      preferredIsExplicit = false
+    }
     if (showFeedback !== false)
       scheduleOsd(actionLabel, iconName, player, handled && (action === "next" || action === "previous"), beforeTrackSignature)
     return handled
@@ -514,12 +489,16 @@ Item {
     return seekToSeconds(clamped * player.length)
   }
 
-  function seekBy(deltaSeconds) {
+  // showFeedback defaults to true for IPC and global hotkeys, and is passed
+  // false from inside the popup: the seek bar is already on screen there, so
+  // an OSD over it is noise rather than feedback. Same contract as runAction.
+  function seekBy(deltaSeconds, showFeedback) {
     var player = activePlayer
     if (!player || !player.positionSupported) return false
     var handled = seekToSeconds(player.position + (Number(deltaSeconds) || 0))
-    if (handled) showOsd(deltaSeconds >= 0 ? "Forward" : "Rewind",
-                         deltaSeconds >= 0 ? "media-next" : "media-previous", player)
+    if (handled && showFeedback !== false)
+      showOsd(deltaSeconds >= 0 ? "Forward" : "Rewind",
+              deltaSeconds >= 0 ? "media-next" : "media-previous", player)
     return handled
   }
 
@@ -532,20 +511,64 @@ Item {
   readonly property string loopLabel: loopState === MprisLoopState.Track ? "Repeat track"
     : loopState === MprisLoopState.Playlist ? "Repeat all" : "Repeat off"
 
-  function toggleShuffle() {
+  function toggleShuffle(showFeedback) {
     var player = activePlayer
     if (!player || !player.shuffleSupported) return false
     player.shuffle = !player.shuffle
-    showOsd(player.shuffle ? "Shuffle on" : "Shuffle off", "media", player)
+    if (showFeedback !== false)
+      showOsd(player.shuffle ? "Shuffle on" : "Shuffle off", "media", player)
     return true
   }
 
-  function cycleLoop() {
+  function cycleLoop(showFeedback) {
     var player = activePlayer
     if (!player || !player.loopSupported) return false
     player.loopState = MediaModel.nextLoopState(
       player.loopState, MprisLoopState.None, MprisLoopState.Track, MprisLoopState.Playlist)
-    showOsd(root.loopLabel, "media", player)
+    if (showFeedback !== false) showOsd(root.loopLabel, "media", player)
+    return true
+  }
+
+  // ---------------------------------------------------------------- volume
+  //
+  // MPRIS Volume is a 0..1 double and is writable, so this is an assignment
+  // like position. Plenty of players never implement it (browsers route
+  // through PipeWire instead), hence volumeSupported gating every path.
+  readonly property bool volumeSupported: activePlayer ? !!activePlayer.volumeSupported : false
+  readonly property real volume: activePlayer && activePlayer.volumeSupported
+    ? Math.min(1, Math.max(0, activePlayer.volume)) : 0
+  readonly property int volumePercent: Math.round(volume * 100)
+
+  function setVolume(fraction, showFeedback) {
+    var player = activePlayer
+    if (!player || !player.volumeSupported) return false
+
+    var value = Number(fraction)
+    if (!isFinite(value)) return false
+
+    player.volume = Math.min(1, Math.max(0, value))
+    if (showFeedback !== false)
+      showOsd(Math.round(player.volume * 100) + "%", "media", player)
+    return true
+  }
+
+  function adjustVolume(delta, showFeedback) {
+    var player = activePlayer
+    if (!player || !player.volumeSupported) return false
+    return setVolume(player.volume + (Number(delta) || 0), showFeedback)
+  }
+
+  // ----------------------------------------------------------------- raise
+  //
+  // MPRIS Raise() asks the player to bring its window forward -- the natural
+  // gesture for clicking the cover art. Plenty of players advertise it and
+  // then ignore it, so this is best-effort by nature.
+  readonly property bool canRaise: activePlayer ? !!activePlayer.canRaise : false
+
+  function raiseActivePlayer() {
+    var player = activePlayer
+    if (!player || !player.canRaise) return false
+    player.raise()
     return true
   }
 
@@ -610,7 +633,10 @@ Item {
       shuffleSupported: root.shuffleSupported,
       shuffle: root.shuffleOn,
       loopSupported: root.loopSupported,
-      loop: root.loopLabel
+      loop: root.loopLabel,
+      volumeSupported: root.volumeSupported,
+      volume: root.volumePercent,
+      canRaise: root.canRaise
     })
   }
 
@@ -677,6 +703,22 @@ Item {
 
     function loop(): string {
       return root.cycleLoop() ? "ok" : "unhandled"
+    }
+
+    function volume(percent: string): string {
+      return root.setVolume((Number(percent) || 0) / 100) ? "ok" : "unhandled"
+    }
+
+    function volumeUp(): string {
+      return root.adjustVolume(0.05) ? "ok" : "unhandled"
+    }
+
+    function volumeDown(): string {
+      return root.adjustVolume(-0.05) ? "ok" : "unhandled"
+    }
+
+    function raise(): string {
+      return root.raiseActivePlayer() ? "ok" : "unhandled"
     }
 
     function ping(): string {

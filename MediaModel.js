@@ -8,8 +8,13 @@ function hasMetadata(player) {
   return !!(player && (player.trackTitle || player.trackArtist || player.identity || player.desktopEntry))
 }
 
+// A track is identified by its title, artist or album -- never by artwork
+// alone. Browsers leave a stale mpris:artUrl behind when a video is torn
+// down, so a Stopped Brave still advertises cover art for a track it no
+// longer has. Counting that as track metadata let an empty player outrank a
+// paused one holding a real track, and the bar widget then went blank.
 function hasTrackMetadata(player) {
-  return !!(player && (player.trackTitle || player.trackArtist || player.trackAlbum || player.trackArtUrl))
+  return !!(player && (player.trackTitle || player.trackArtist || player.trackAlbum))
 }
 
 function playerCanControl(player) {
@@ -24,6 +29,26 @@ function canHandleAction(player, action) {
   if (action === "pause") return !!(player.canPause || player.canTogglePlaying)
   if (action === "playPause") return !!(player.canTogglePlaying || player.canPlay || player.canPause)
   return false
+}
+
+// Playing beats paused beats stopped. A paused player still holds a loaded
+// track; a stopped one has thrown it away, so it should never be picked over
+// a player that still has something to show. stoppedValue is
+// MprisPlaybackState.Stopped, passed in by the caller.
+function playbackRank(player, stoppedValue) {
+  if (!player) return 0
+  if (player.isPlaying) return 3
+  if (stoppedValue !== undefined && player.playbackState === stoppedValue) return 1
+  return 2
+}
+
+// Keep whichever of the two ranks higher, preferring the incumbent on a tie
+// so iteration order still decides between two equally live players.
+function preferByPlayback(current, candidate, stoppedValue) {
+  if (!current) return candidate
+  if (!candidate) return current
+  return playbackRank(candidate, stoppedValue) > playbackRank(current, stoppedValue)
+    ? candidate : current
 }
 
 function canCycleSource(player) {
@@ -71,6 +96,8 @@ function playerAppLabel(player) {
   return player.desktopEntry || player.identity || dbus
 }
 
+var MIN_FUZZY_KEY = 4
+
 function playerHasPlaybackStream(player, playbackStreams) {
   var playerKey = streamLabelKey(playerAppLabel(player))
   if (!playerKey) return false
@@ -79,10 +106,12 @@ function playerHasPlaybackStream(player, playbackStreams) {
   for (var i = 0; i < streams.length; i++) {
     var streamKey = streamLabelKey(rawStreamLabel(streams[i]))
     if (!streamKey) continue
-    if (streamKey === playerKey
-        || streamKey.indexOf(playerKey) !== -1
-        || playerKey.indexOf(streamKey) !== -1)
-      return true
+    // Substring matching either way is what pairs "chrome" with "chromium",
+    // but on a two- or three-letter key it pairs with almost anything, so
+    // only an exact hit counts below the threshold.
+    if (streamKey === playerKey) return true
+    if (streamKey.length >= MIN_FUZZY_KEY && playerKey.indexOf(streamKey) !== -1) return true
+    if (playerKey.length >= MIN_FUZZY_KEY && streamKey.indexOf(playerKey) !== -1) return true
   }
 
   return false
@@ -124,7 +153,7 @@ function plainText(value) {
 function osdMessage(player, fallback) {
   if (!player) return fallback
   var label = plainText(labelFor(player))
-  if (label && player.trackArtist) return label + " - " + plainText(player.trackArtist)
+  if (label && player.trackArtist) return label + " \u2014 " + plainText(player.trackArtist)
   return label || fallback
 }
 
@@ -209,6 +238,8 @@ if (typeof module !== "undefined") {
     playerCanControl: playerCanControl,
     canHandleAction: canHandleAction,
     canCycleSource: canCycleSource,
+    playbackRank: playbackRank,
+    preferByPlayback: preferByPlayback,
     nodeProps: nodeProps,
     isPlaybackStream: isPlaybackStream,
     streamLabelKey: streamLabelKey,

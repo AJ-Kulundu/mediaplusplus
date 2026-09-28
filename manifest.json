@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "ajkulundu.mediaplusplus",
   "name": "Media++",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "author": "AJ Kulundu",
-  "description": "MPRIS media player with seeking, shuffle and repeat, vinyl artwork, animated progress styles, a settings panel and hotkeys",
+  "description": "MPRIS media player with seeking, volume, shuffle and repeat, vinyl artwork, animated progress styles, a settings panel and hotkeys",
   "kinds": [
     "service",
     "bar-widget"
@@ -23,6 +23,7 @@
       "labelWidth": 136,
       "scrollSpeed": 0.6,
       "scrollPause": 5,
+      "seekStep": 10,
       "artworkStyle": "square",
       "progressAnimation": "default"
     },
@@ -30,29 +31,59 @@
       {
         "key": "labelWidth",
         "type": "int",
-        "label": "Label width"
+        "label": "Label width",
+        "description": "Width of the track label on the bar, in pixels. Fixed so the bar does not reflow on every track change.",
+        "min": 60,
+        "max": 480,
+        "step": 4,
+        "defaultValue": 136
       },
       {
         "key": "scrollSpeed",
         "type": "real",
-        "label": "Carousel speed"
+        "label": "Carousel speed",
+        "description": "Multiplier on the scrolling pace of a long title. Below 1 is slower.",
+        "min": 0.1,
+        "max": 4.0,
+        "step": 0.1,
+        "defaultValue": 0.6
       },
       {
         "key": "scrollPause",
         "type": "int",
-        "label": "Pause between cycles (s)"
+        "label": "Pause between cycles (s)",
+        "description": "How long the title holds still between scroll passes, in seconds.",
+        "min": 0,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "seekStep",
+        "type": "int",
+        "label": "Seek step (s)",
+        "description": "Seconds the -/+ buttons and the b/f keys jump. One of 5, 10, 15 or 30 -- other values snap to the nearest, so the button icon always matches what it does.",
+        "min": 5,
+        "max": 30,
+        "step": 5,
+        "defaultValue": 10
       },
       {
         "key": "artworkStyle",
         "type": "string",
-        "label": "Popup artwork"
+        "label": "Popup artwork",
+        "description": "\"square\" keeps the cover's own aspect ratio; \"vinyl\" fills a record that turns while playing.",
+        "defaultValue": "square"
       },
       {
         "key": "progressAnimation",
         "type": "string",
-        "label": "Progress animation"
+        "label": "Progress animation",
+        "description": "\"default\" is a plain bar, \"wiggle\" is the Material 3 Expressive wave, \"stripes\" is a barber-pole sweep.",
+        "defaultValue": "default"
       }
-    ]
+    ],
+    "defaultSection": "left"
   },
   "omarchy": {
     "clonedFrom": "omarchy.media"
