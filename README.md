@@ -122,10 +122,12 @@ Gear icon, top right of the popup.
 
 **Square** keeps the cover's own aspect ratio; **Vinyl** fills a record that
 turns while playing. **Wiggle** is Material 3 Expressive's wave, flattening
-when playback pauses; **Pac-Man** eats his way along a row of pellets, chomping
-while the track plays and resting with his mouth open when it does not — the
+when playback pauses; **Pac-Man** eats his way along a row of pellets — the
 pellets ahead are what is left to play, the cleared line behind is what has
-gone. He takes the accent colour like every other indicator, so he follows your
+gone. He travels with his mouth shut, marked by a seam so he still reads as
+Pac-Man at rest rather than as a plain dot, and opens it only to take a pellet:
+the bite is fired by arriving at a dot, not by a timer, so it always lands on
+one. He takes the accent colour like every other indicator, so he follows your
 theme rather than importing arcade yellow into it.
 
 The earlier barber-pole **Stripes** style was replaced by Pac-Man in v1.2.0. A

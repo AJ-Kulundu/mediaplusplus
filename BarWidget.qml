@@ -1249,14 +1249,6 @@ BarWidget {
                 // the two can never drift apart.
                 readonly property real eatOffset: pacRadius * 0.85
 
-                // Chomping stops when playback does, easing over the same 260ms
-                // the wiggle takes to flatten. It settles on a mouth that is
-                // still open, not a shut one: a closed Pac-Man is a circle, and
-                // a circle parked on a line is just a slider knob. Resting with
-                // his mouth open keeps him legible while paused.
-                property real chomp: active ? 1 : 0
-                readonly property real restingMouth: 0.55
-
                 // A bite is an event, not a rhythm. Counting the pellets he has
                 // reached gives an integer that changes only on arrival, so the
                 // mouth is driven by the dots rather than by a free-running
@@ -1269,18 +1261,22 @@ BarWidget {
                   return Math.max(0, Math.floor((mouthX - pacRadius) / pitch) + 1)
                 }
 
-                // 0 is wide open, 1 is shut. Snap closed, ease back open.
+                // 0 is shut, 1 is wide open. He travels with his mouth closed
+                // and opens it only to take a pellet, so the whole gesture is
+                // the bite -- open onto the dot, shut on it. Resting shut means
+                // he is a plain circle between pellets, which is the tradeoff
+                // for the bite landing exactly where the dot is.
                 property real bite: 0
 
                 SequentialAnimation {
                   id: biteAnim
                   NumberAnimation {
                     target: wave; property: "bite"; to: 1
-                    duration: 70; easing.type: Easing.InQuad
+                    duration: 90; easing.type: Easing.OutQuad
                   }
                   NumberAnimation {
                     target: wave; property: "bite"; to: 0
-                    duration: 120; easing.type: Easing.OutQuad
+                    duration: 110; easing.type: Easing.InQuad
                   }
                 }
 
@@ -1289,7 +1285,6 @@ BarWidget {
                 }
 
                 Behavior on amplitude { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-                Behavior on chomp { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
                 NumberAnimation on phase {
                   // Always running, never stopped: `paused` may only be set on
@@ -1314,7 +1309,6 @@ BarWidget {
 
                 onPhaseChanged: if (visible) requestPaint()
                 onAmplitudeChanged: if (visible) requestPaint()
-                onChompChanged: if (visible) requestPaint()
                 onBiteChanged: if (visible) requestPaint()
                 Connections {
                   target: root
@@ -1382,19 +1376,30 @@ BarWidget {
                     // Pac-Man. The wedge is cut around angle 0 so the mouth
                     // faces the direction of travel; the pie is drawn from one
                     // lip clockwise round to the other.
-                    // Wide open while travelling, snapped shut by the bite as
-                    // he arrives at a pellet, and easing to a fixed open mouth
-                    // when playback stops. Blended by `chomp` so stopping is a
-                    // settle rather than a jump between two behaviours.
-                    var openness = 1 - wave.bite
-                    var mouth = wave.maxMouth
-                      * (wave.chomp * openness + (1 - wave.chomp) * wave.restingMouth)
+                    // Shut unless he is mid-bite. Nothing else moves the mouth,
+                    // so a paused Pac-Man and a travelling one look the same --
+                    // the position is what says whether anything is happening.
+                    var mouth = wave.maxMouth * wave.bite
                     ctx.fillStyle = Color.accent
                     ctx.beginPath()
                     ctx.moveTo(pacX, mid)
                     ctx.arc(pacX, mid, pacR, mouth, 2 * Math.PI - mouth)
                     ctx.closePath()
                     ctx.fill()
+
+                    // The closed mouth is still a mouth: a seam cut from his
+                    // centre to the rim in the surface colour, so at rest he
+                    // reads as Pac-Man with his mouth shut rather than as a
+                    // plain circle parked on a line. While the wedge is open
+                    // this line lies inside the cut and is invisible, so one
+                    // stroke serves both states.
+                    ctx.strokeStyle = Color.popups.background
+                    ctx.lineWidth = Math.max(1, pacR * 0.14)
+                    ctx.lineCap = "butt"
+                    ctx.beginPath()
+                    ctx.moveTo(pacX, mid)
+                    ctx.lineTo(pacX + pacR, mid)
+                    ctx.stroke()
 
                     // The eye, punched out in the surface colour so it stays a
                     // hole on any theme rather than a second painted dot.
