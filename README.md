@@ -98,6 +98,18 @@ cover asks the player to bring its own window forward. When more than one
 player is running, each appears in a list below with its app icon; the list
 scrolls once it is taller than a few rows rather than growing the popup.
 
+### Untrusted artwork
+
+`trackArtUrl` is attacker-influenced: a web page sets it through the
+MediaSession API and the browser passes it straight to MPRIS. Every cover is
+therefore decoded inside a fixed bounding box on **both** axes, so no source
+shape can blow up the decode — a 120000x200 PNG of flat colour is 69 KB on the
+wire and decodes to 92 MB of RGBA if only one axis is capped, because Qt scales
+an image down but never up and so leaves an already-short image at its full
+width. With the box, the ceiling is the box regardless of input, and the frame
+takes its aspect ratio from the pixmap Qt actually produced rather than from
+the box.
+
 ## Settings
 
 Gear icon, top right of the popup.

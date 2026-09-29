@@ -36,17 +36,22 @@ BarWidget {
 
   // Cover-art decode caps.
   //
-  // MPRIS hands over whatever the player has: Spotify sends ~640px, local
-  // files and some services send 1500px and up. Decoded, a 2000px cover is
-  // ~16MB of RGBA sitting in Qt's pixmap cache -- per track, for pixels that
-  // are thrown away drawing it into a frame 134dp across. Uncapped, changing
-  // tracks walks that cache up until it starts evicting.
+  // trackArtUrl is not ours. A web page sets it through the MediaSession API
+  // and the browser forwards it verbatim, so the bytes behind it are chosen by
+  // whoever wrote the page -- and this shell runs for weeks.
   //
-  // Exactly ONE dimension is capped on each image, deliberately: Qt scales the
-  // other in proportion, which preserves the source's real aspect ratio. That
-  // matters twice over -- artFrame reads the ratio back off sourceSize to
-  // shape itself, so pinning both axes would report every cover as square, and
-  // a cropped thumbnail would decode squashed before it was ever cropped.
+  // BOTH axes are capped, as a bounding box. Qt scales the source down to fit
+  // inside the box and preserves its aspect ratio while doing so, so the box
+  // costs nothing in fidelity. Capping a single axis does NOT bound the decode:
+  // Qt only ever scales an image DOWN, so a source already shorter than the cap
+  // is left entirely alone and its width stays whatever the attacker chose. A
+  // 120000x200 PNG of flat colour is 69KB on the wire and decodes to 92MB of
+  // RGBA -- measured, not theorised. With the box it decodes to nothing.
+  //
+  // The frame reads its aspect ratio off implicitWidth/implicitHeight -- the
+  // dimensions of the pixmap Qt actually produced -- never off sourceSize,
+  // which reads back as the box we asked for rather than anything about the
+  // image.
   readonly property int artDecodeSize: Math.round(Style.space(134) * 2)
   readonly property int barArtDecodeSize: Math.round(artSize * 2)
 
@@ -505,6 +510,7 @@ BarWidget {
         // explicit sourceSize the full-size image is decoded and then naively
         // downscaled, which aliases into noise at this size; decoding at 2x
         // the slot lets Qt filter properly and leaves headroom for scaling.
+        sourceSize.width: root.barArtDecodeSize
         sourceSize.height: root.barArtDecodeSize
         source: root.artUrl
         visible: status === Image.Ready && root.artUrl !== ""
@@ -772,24 +778,34 @@ BarWidget {
           Item {
             id: artFrame
 
-            // Measured off the loaded pixmap, not off sourceSize. Only one
-            // axis of sourceSize is set (so Qt scales the other in proportion
-            // and the ratio survives the decode cap), and the axis left unset
-            // reads back as 0 -- which made `ready` permanently false and put
-            // the placeholder glyph over every cover. implicitWidth/Height are
-            // the dimensions of the pixmap actually loaded, so they carry the
-            // true ratio whichever axis was capped.
+            // Measured off the loaded pixmap, never off sourceSize: sourceSize
+            // reads back as the bounding box we asked for, so using it reported
+            // every cover as square and put the placeholder glyph over all of
+            // them. implicitWidth/Height are the dimensions Qt actually
+            // produced, and they carry the source's true ratio.
             readonly property bool ready: artImage.status === Image.Ready
               && artImage.implicitWidth > 0 && artImage.implicitHeight > 0
-            readonly property real aspect: ready
+
+            // Clamped to ratios a cover plausibly has. The decode box already
+            // bounds memory, but it cannot make a 400:1 banner a sensible
+            // shape -- unclamped, that lands as a 240x1 sliver with the
+            // metadata jammed under it. Anything past the clamp is letterboxed
+            // by PreserveAspectFit instead, which is the honest way to show an
+            // image that is not cover-shaped.
+            readonly property real minAspect: 0.4
+            readonly property real maxAspect: 2.5
+            readonly property real rawAspect: ready
               ? artImage.implicitWidth / artImage.implicitHeight
               : (root.isVideo ? 16 / 9 : 1)
+            readonly property real aspect: Math.min(maxAspect, Math.max(minAspect, rawAspect))
             readonly property real maxHeight: Style.space(134)
 
             visible: !root.vinylArtwork
             anchors.horizontalCenter: parent.horizontalCenter
-            height: visible ? Math.min(maxHeight, column.width / Math.max(0.2, aspect)) : 0
-            width: visible ? Math.min(column.width, height * Math.max(0.2, aspect)) : 0
+            // `aspect` is already clamped to a sane range, so the old
+            // Math.max(0.2, ...) guard against a divide-by-zero is redundant.
+            height: visible ? Math.min(maxHeight, column.width / aspect) : 0
+            width: visible ? Math.min(column.width, height * aspect) : 0
 
             Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
             Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
@@ -877,11 +893,11 @@ BarWidget {
                 cache: true
                 smooth: true
                 mipmap: true
-                // Height only -- artFrame reads the aspect ratio back off
-                // sourceSize, and pinning both axes would report every cover
-                // as square. Constant rather than bound to the frame, whose
-                // width and height animate: a decode per animation frame is
-                // exactly what this cap exists to prevent.
+                // A bounding box on both axes, so no aspect ratio can escape
+                // it. Constant rather than bound to the frame, whose width and
+                // height animate: a decode per animation frame is exactly what
+                // this cap exists to prevent.
+                sourceSize.width: root.artDecodeSize
                 sourceSize.height: root.artDecodeSize
                 // Dropped while the vinyl is on screen. The source drives the
                 // load, not visibility, so leaving it set kept a second full
@@ -1050,6 +1066,7 @@ BarWidget {
                   // 0 when square artwork is selected, and a sourceSize of 0
                   // means "no cap", so hiding the record was what made it
                   // decode at full resolution.
+                  sourceSize.width: root.artDecodeSize
                   sourceSize.height: root.artDecodeSize
                   source: root.vinylArtwork ? root.artUrl : ""
                   visible: status === Image.Ready && root.artUrl !== ""
