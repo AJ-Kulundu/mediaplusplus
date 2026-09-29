@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ajkulundu.mediaplusplus",
   "name": "Media++",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "author": "AJ Kulundu",
   "description": "MPRIS media player with seeking, volume, shuffle and repeat, vinyl artwork, animated progress styles, a settings panel and hotkeys",
   "kinds": [
@@ -79,7 +79,7 @@
         "key": "progressAnimation",
         "type": "string",
         "label": "Progress animation",
-        "description": "\"default\" is a plain bar, \"wiggle\" is the Material 3 Expressive wave, \"stripes\" is a barber-pole sweep.",
+        "description": "\"default\" is a plain bar, \"wiggle\" is the Material 3 Expressive wave, \"pacman\" eats his way along a row of pellets. The retired \"stripes\" value is read as \"pacman\".",
         "defaultValue": "default"
       }
     ],

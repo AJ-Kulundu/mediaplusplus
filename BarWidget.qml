@@ -290,13 +290,21 @@ BarWidget {
   // displayPosition rather than straight from the service, so the curve the
   // fill travels on is ours to choose; PanelSlider's own 140ms smoothing
   // rides on top of whichever we pick.
-  readonly property var progressStyles: ["default", "wiggle", "stripes"]
-  readonly property string progressAnimation: String(setting("progressAnimation", "default"))
+  readonly property var progressStyles: ["default", "wiggle", "pacman"]
+  readonly property string progressAnimation: {
+    var stored = String(setting("progressAnimation", "default"))
+    // "stripes" was the barber-pole style up to v1.1.1, which pacman replaced.
+    // Map it rather than letting an existing config fall silently back to the
+    // plain bar -- the user picked a drawn style, so give them one.
+    if (stored === "stripes") return "pacman"
+    return progressStyles.indexOf(stored) === -1 ? "default" : stored
+  }
   readonly property bool wiggleProgress: progressAnimation === "wiggle"
-  readonly property bool stripesProgress: progressAnimation === "stripes"
-  // Both drawn styles share one bar body -- gap, remaining track, stop dot --
-  // and one Canvas, differing only in what that Canvas paints.
-  readonly property bool styledProgress: wiggleProgress || stripesProgress
+  readonly property bool pacmanProgress: progressAnimation === "pacman"
+  // Both drawn styles share one bar body and one Canvas, differing only in
+  // what that Canvas paints. Pacman also takes over the remaining track and
+  // the stop dot, because its pellets ARE the track.
+  readonly property bool styledProgress: wiggleProgress || pacmanProgress
 
   readonly property int progressDuration: styledProgress ? 300 : 140
   readonly property int progressEasing: styledProgress ? Easing.Bezier : Easing.OutCubic
@@ -1200,8 +1208,10 @@ BarWidget {
               }
 
               // Remaining track, starting one gap past the active indicator and
-              // stopping short of the dot.
+              // stopping short of the dot. Pacman draws its own track as a row
+              // of pellets, so this line and the stop dot both stand down.
               Rectangle {
+                visible: !root.pacmanProgress
                 x: Math.min(parent.width, wiggleBar.activeWidth + wiggleBar.gap)
                 width: Math.max(0, parent.width - x - wiggleBar.stopSize - wiggleBar.gap)
                 height: wiggleBar.barHeight
@@ -1225,17 +1235,26 @@ BarWidget {
                   && !!root.activePlayer.isPlaying
                 property real amplitude: active ? Style.space(3) : 0
                 readonly property real wavelength: Style.space(20)
-                readonly property real stripeWidth: Style.space(6)
 
-                // Stripes read as a highlight over the accent, so they have to
-                // move away from it: lighten a dark accent, darken a light one.
-                readonly property color stripeColor: {
-                  var a = Color.accent
-                  var lum = 0.2126 * a.r + 0.7152 * a.g + 0.0722 * a.b
-                  return lum > 0.6 ? Qt.rgba(0, 0, 0, 0.22) : Qt.rgba(1, 1, 1, 0.30)
-                }
+                // Pac-Man geometry. He is drawn far larger than the 4dp bar the
+                // other styles use, so the wedge reads as a mouth rather than a
+                // notch -- the 18dp row this Canvas fills is what makes room.
+                readonly property real pacRadius: Style.space(6)
+                readonly property real pelletRadius: Style.space(1.5)
+                readonly property real pelletPitch: Style.space(9)
+                // Half-angle of the open mouth, in radians.
+                readonly property real maxMouth: 0.62
+
+                // Chomping stops when playback does, easing over the same 260ms
+                // the wiggle takes to flatten. It settles on a mouth that is
+                // still open, not a shut one: a closed Pac-Man is a circle, and
+                // a circle parked on a line is just a slider knob. Resting with
+                // his mouth open keeps him legible while paused.
+                property real chomp: active ? 1 : 0
+                readonly property real restingMouth: 0.55
 
                 Behavior on amplitude { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+                Behavior on chomp { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
                 NumberAnimation on phase {
                   // Always running, never stopped: `paused` may only be set on
@@ -1255,6 +1274,7 @@ BarWidget {
 
                 onPhaseChanged: if (visible) requestPaint()
                 onAmplitudeChanged: if (visible) requestPaint()
+                onChompChanged: if (visible) requestPaint()
                 Connections {
                   target: root
                   function onProgressAnimationChanged() { wave.requestPaint() }
@@ -1270,45 +1290,82 @@ BarWidget {
                   var ctx = getContext("2d")
                   ctx.reset()
 
-                  var end = wiggleBar.activeWidth
-                  if (end <= 0) return
-
                   var mid = height / 2
                   var h = wiggleBar.barHeight
                   var r = h / 2
 
-                  if (root.stripesProgress) {
-                    // Barber-pole. Clip to the same rounded capsule the wiggle
-                    // ends in, fill it with the accent, then sweep diagonal
-                    // bands across it -- the clip is what keeps the bands from
-                    // spilling past the rounded ends.
-                    ctx.beginPath()
-                    ctx.moveTo(r, mid - r)
-                    ctx.lineTo(Math.max(r, end - r), mid - r)
-                    ctx.arc(Math.max(r, end - r), mid, r, -Math.PI / 2, Math.PI / 2)
-                    ctx.lineTo(r, mid + r)
-                    ctx.arc(r, mid, r, Math.PI / 2, -Math.PI / 2)
-                    ctx.closePath()
-                    ctx.clip()
+                  if (root.pacmanProgress) {
+                    // Pac-Man eats his way along the track. The pellets ahead
+                    // are the remaining time and the cleared line behind him is
+                    // the elapsed time, so the maze reads as a progress bar
+                    // without needing a second indicator on top of it.
+                    var pacR = wave.pacRadius
+                    var pitch = Math.max(2, wave.pelletPitch)
 
-                    ctx.fillStyle = Color.accent
-                    ctx.fillRect(0, mid - r, end, h)
+                    // He is inset by his own radius at both ends, or he would
+                    // be sliced in half at 0% and again at 100%.
+                    var travel = Math.max(1, width - 2 * pacR)
+                    var pacX = pacR + wiggleBar.fraction * travel
 
-                    var band = wave.stripeWidth
-                    var period = band * 2
-                    var shift = (wave.phase / (2 * Math.PI)) * period
-                    ctx.fillStyle = wave.stripeColor
-                    for (var sx = -h - period + shift; sx < end + h; sx += period) {
+                    // Cleared track behind him.
+                    var trailEnd = pacX - pacR - Style.space(2)
+                    if (trailEnd > r) {
+                      ctx.lineWidth = h
+                      ctx.lineCap = "round"
+                      ctx.strokeStyle = Color.accent
                       ctx.beginPath()
-                      ctx.moveTo(sx, mid + r)
-                      ctx.lineTo(sx + h, mid - r)
-                      ctx.lineTo(sx + h + band, mid - r)
-                      ctx.lineTo(sx + band, mid + r)
-                      ctx.closePath()
+                      ctx.moveTo(r, mid)
+                      ctx.lineTo(trailEnd, mid)
+                      ctx.stroke()
+                    }
+
+                    // Pellets still to eat. The grid is anchored to the left
+                    // edge rather than to him, so they hold still while he
+                    // advances through them instead of sliding along with him.
+                    // The last slot is the power pellet, and it pulses.
+                    var lastSlot = pacR
+                    for (var gx = pacR; gx <= width - pacR; gx += pitch) lastSlot = gx
+
+                    ctx.fillStyle = Style.selectedFillFor(root.bar.foreground, Color.accent)
+                    for (var px = pacR; px <= width - pacR; px += pitch) {
+                      // Eaten once he reaches it.
+                      if (px < pacX + pacR * 0.85) continue
+                      var pr = px === lastSlot
+                        ? wave.pelletRadius * (1.7 + 0.2 * Math.sin(wave.phase * 2))
+                        : wave.pelletRadius
+                      ctx.beginPath()
+                      ctx.arc(px, mid, pr, 0, 2 * Math.PI)
                       ctx.fill()
                     }
+
+                    // Pac-Man. The wedge is cut around angle 0 so the mouth
+                    // faces the direction of travel; the pie is drawn from one
+                    // lip clockwise round to the other.
+                    // Chomping while playing, a fixed open mouth when not.
+                    // Blended by `chomp` so the transition is continuous rather
+                    // than a jump between two behaviours.
+                    var bite = Math.abs(Math.sin(wave.phase * 3))
+                    var mouth = wave.maxMouth
+                      * (wave.chomp * bite + (1 - wave.chomp) * wave.restingMouth)
+                    ctx.fillStyle = Color.accent
+                    ctx.beginPath()
+                    ctx.moveTo(pacX, mid)
+                    ctx.arc(pacX, mid, pacR, mouth, 2 * Math.PI - mouth)
+                    ctx.closePath()
+                    ctx.fill()
+
+                    // The eye, punched out in the surface colour so it stays a
+                    // hole on any theme rather than a second painted dot.
+                    ctx.fillStyle = Color.popups.background
+                    ctx.beginPath()
+                    ctx.arc(pacX - pacR * 0.12, mid - pacR * 0.42,
+                            Math.max(1, pacR * 0.17), 0, 2 * Math.PI)
+                    ctx.fill()
                     return
                   }
+
+                  var end = wiggleBar.activeWidth
+                  if (end <= 0) return
 
                   ctx.lineWidth = h
                   ctx.lineCap = "round"
@@ -1333,6 +1390,7 @@ BarWidget {
 
               // Stop indicator: the dot Material parks at the end of the track.
               Rectangle {
+                visible: !root.pacmanProgress
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 width: wiggleBar.stopSize
@@ -1711,7 +1769,7 @@ BarWidget {
             options: [
               { value: "default", label: "Plain" },
               { value: "wiggle", label: "Wiggle" },
-              { value: "stripes", label: "Stripes" }
+              { value: "pacman", label: "Pac-Man" }
             ]
             value: root.progressAnimation
             foreground: root.bar.foreground

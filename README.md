@@ -61,7 +61,7 @@ works while the popup is open.
 | Source switching | Title only | App icon per source, click a row to switch | `[` / `]` |
 | Raise the player | — | Click the cover to focus the player's own window | `o` |
 | Artwork | Fixed square thumbnail | Aspect-driven frame, or a spinning vinyl | `v` |
-| Progress bar | — | Plain, Material 3 Expressive wiggle, or barber-pole stripes | `y` |
+| Progress bar | — | Plain, Material 3 Expressive wiggle, or Pac-Man | `y` |
 | Position on bar | — | Left · center · right | `m` |
 | Settings panel | — | In-popup: bar position, artwork, progress style | `s` |
 | Close the popup | — | — | `esc` |
@@ -118,11 +118,19 @@ Gear icon, top right of the popup.
 |---|---|---|
 | Position on bar (`m`) | Left · Center · Right | Left |
 | Popup artwork (`v`) | Square · Vinyl | Square |
-| Progress animation (`y`) | Plain · Wiggle · Stripes | Plain |
+| Progress animation (`y`) | Plain · Wiggle · Pac-Man | Plain |
 
 **Square** keeps the cover's own aspect ratio; **Vinyl** fills a record that
 turns while playing. **Wiggle** is Material 3 Expressive's wave, flattening
-when playback pauses; **Stripes** is a barber-pole sweep.
+when playback pauses; **Pac-Man** eats his way along a row of pellets, chomping
+while the track plays and resting with his mouth open when it does not — the
+pellets ahead are what is left to play, the cleared line behind is what has
+gone. He takes the accent colour like every other indicator, so he follows your
+theme rather than importing arcade yellow into it.
+
+The earlier barber-pole **Stripes** style was replaced by Pac-Man in v1.2.0. A
+config still holding `"stripes"` is read as `"pacman"`, so the choice of a drawn
+bar is preserved rather than falling back to the plain one.
 
 Anything not exposed in the panel is an inline field on the widget's entry in
 `~/.config/omarchy/shell.json`:
