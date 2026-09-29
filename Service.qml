@@ -529,35 +529,6 @@ Item {
     return true
   }
 
-  // ---------------------------------------------------------------- volume
-  //
-  // MPRIS Volume is a 0..1 double and is writable, so this is an assignment
-  // like position. Plenty of players never implement it (browsers route
-  // through PipeWire instead), hence volumeSupported gating every path.
-  readonly property bool volumeSupported: activePlayer ? !!activePlayer.volumeSupported : false
-  readonly property real volume: activePlayer && activePlayer.volumeSupported
-    ? Math.min(1, Math.max(0, activePlayer.volume)) : 0
-  readonly property int volumePercent: Math.round(volume * 100)
-
-  function setVolume(fraction, showFeedback) {
-    var player = activePlayer
-    if (!player || !player.volumeSupported) return false
-
-    var value = Number(fraction)
-    if (!isFinite(value)) return false
-
-    player.volume = Math.min(1, Math.max(0, value))
-    if (showFeedback !== false)
-      showOsd(Math.round(player.volume * 100) + "%", "media", player)
-    return true
-  }
-
-  function adjustVolume(delta, showFeedback) {
-    var player = activePlayer
-    if (!player || !player.volumeSupported) return false
-    return setVolume(player.volume + (Number(delta) || 0), showFeedback)
-  }
-
   // ----------------------------------------------------------------- raise
   //
   // MPRIS Raise() asks the player to bring its window forward -- the natural
@@ -634,8 +605,6 @@ Item {
       shuffle: root.shuffleOn,
       loopSupported: root.loopSupported,
       loop: root.loopLabel,
-      volumeSupported: root.volumeSupported,
-      volume: root.volumePercent,
       canRaise: root.canRaise
     })
   }
@@ -703,18 +672,6 @@ Item {
 
     function loop(): string {
       return root.cycleLoop() ? "ok" : "unhandled"
-    }
-
-    function volume(percent: string): string {
-      return root.setVolume((Number(percent) || 0) / 100) ? "ok" : "unhandled"
-    }
-
-    function volumeUp(): string {
-      return root.adjustVolume(0.05) ? "ok" : "unhandled"
-    }
-
-    function volumeDown(): string {
-      return root.adjustVolume(-0.05) ? "ok" : "unhandled"
     }
 
     function raise(): string {

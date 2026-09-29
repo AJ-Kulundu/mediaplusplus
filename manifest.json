@@ -4,7 +4,7 @@
   "name": "Media++",
   "version": "1.2.0",
   "author": "AJ Kulundu",
-  "description": "MPRIS media player with seeking, volume, shuffle and repeat, vinyl artwork, animated progress styles, a settings panel and hotkeys",
+  "description": "MPRIS media player with seeking, shuffle and repeat, vinyl artwork, animated progress styles, a settings panel and hotkeys",
   "kinds": [
     "service",
     "bar-widget"

@@ -109,8 +109,6 @@ BarWidget {
   readonly property bool canSeek: mediaService ? mediaService.canSeek : false
   readonly property string artUrl: activePlayer && activePlayer.trackArtUrl ? activePlayer.trackArtUrl : ""
 
-  readonly property bool volumeSupported: mediaService ? mediaService.volumeSupported : false
-  readonly property real volumeLevel: mediaService ? mediaService.volume : 0
   readonly property bool canRaise: mediaService ? mediaService.canRaise : false
 
   // Seek step, in seconds. Restricted to the four values Material ships a
@@ -213,11 +211,9 @@ BarWidget {
     }
     if (!svc) return
 
-    // Continuous adjustments come first, because these are the only keys that
-    // should act on auto-repeat: holding f scrubs forward, holding Up ramps
-    // the volume. Feedback is suppressed throughout -- the popup is on screen
-    // and already shows the seek bar and the volume slider, so an OSD over it
-    // is noise rather than feedback.
+    // Seeking comes first, because it is the only action that should repeat
+    // on a held key. Feedback is suppressed: the seek bar is on screen and is
+    // its own readout, so an OSD over it would be noise rather than feedback.
     if (text === "b" || event.key === Qt.Key_Left) {
       svc.seekBy(-root.seekStep, false)
       event.accepted = true
@@ -228,17 +224,6 @@ BarWidget {
       event.accepted = true
       return
     }
-    if (event.key === Qt.Key_Up) {
-      svc.adjustVolume(0.05, false)
-      event.accepted = true
-      return
-    }
-    if (event.key === Qt.Key_Down) {
-      svc.adjustVolume(-0.05, false)
-      event.accepted = true
-      return
-    }
-
     // Everything below is a discrete action. A held space would machine-gun
     // play/pause and a held n would skip a dozen tracks, so repeats stop here
     // -- accepted, so they are swallowed rather than passed on.
@@ -1585,50 +1570,6 @@ BarWidget {
               opacity: !enabled ? 0.35 : (root.loopLabel === "Repeat off" ? 0.6 : 1.0)
               tipText: root.loopLabel + "  (r)"
               onClicked: if (root.mediaService) root.mediaService.cycleLoop(false)
-            }
-          }
-
-          // ------------------------------------------------------------ volume
-          //
-          // Only for players that implement MPRIS Volume. Browsers route their
-          // audio through PipeWire and report volumeSupported false, so the row
-          // is hidden for them rather than showing a slider that does nothing.
-          Row {
-            id: volumeRow
-            visible: root.volumeSupported
-            width: parent.width
-            spacing: Style.space(6)
-
-            Text {
-              id: volumeGlyph
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.volumeLevel <= 0 ? "󰖁"
-                : root.volumeLevel < 0.5 ? "󰕿" : "󰕾"
-              color: root.mutedText(0.26)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.body
-              width: Style.space(20)
-              horizontalAlignment: Text.AlignHCenter
-            }
-
-            PanelSlider {
-              id: volumeSlider
-              bar: root.bar
-              anchors.verticalCenter: parent.verticalCenter
-              width: parent.width - volumeGlyph.width - parent.spacing
-              minimum: 0
-              maximum: 1
-              step: 0.05
-              value: root.volumeLevel
-              // Applied while dragging as well as on release: a volume slider
-              // that only lands when you let go is unusable for finding a
-              // level by ear. Feedback is off -- the slider is the feedback.
-              onMoved: function(value) {
-                if (root.mediaService) root.mediaService.setVolume(value, false)
-              }
-              onReleased: function(value) {
-                if (root.mediaService) root.mediaService.setVolume(value, false)
-              }
             }
           }
 

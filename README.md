@@ -1,8 +1,8 @@
 # Media++
 
 An Omarchy shell media plugin. It does everything `omarchy.media` does, plus
-seeking, volume, shuffle and repeat, a settings panel, hotkeys, and two ways of
-drawing the artwork and the progress bar.
+seeking, shuffle and repeat, a settings panel, hotkeys, and two ways of drawing
+the artwork and the progress bar.
 
 ![Media++](preview.png)
 
@@ -55,7 +55,6 @@ works while the popup is open.
 | Play / pause | ✓ | ✓ | `space` |
 | Previous / next track | ✓ | ✓ | `p` / `n` |
 | Seeking | — | Scrub bar, ± buttons, `seekTo`/`seekPercent` over IPC | `b` / `f`, `←` / `→` |
-| Volume | — | Slider in the popup, `volume`/`volumeUp`/`volumeDown` over IPC | `↑` / `↓` |
 | Shuffle | — | With per-player support detection | `x` |
 | Repeat | — | Off · all · track | `r` |
 | Source switching | Title only | App icon per source, click a row to switch | `[` / `]` |
@@ -67,9 +66,9 @@ works while the popup is open.
 | Close the popup | — | — | `esc` |
 | Bar label | Resizes with the title | Fixed width, continuous carousel | — |
 
-Keys are matched on the character, so they follow your keyboard layout. Seek
-and volume repeat when held; everything else acts once per press, so leaning on
-`space` will not machine-gun play/pause.
+Keys are matched on the character, so they follow your keyboard layout. Seeking
+repeats when held; everything else acts once per press, so leaning on `space`
+will not machine-gun play/pause.
 
 It also fixes several things the stock plugin gets wrong: the bar label can
 strand itself off-screen and vanish; secondary text inverts its contrast on
@@ -89,10 +88,6 @@ track.
 
 Artwork, track metadata, a scrub bar with elapsed and total time, and a
 transport row: shuffle · previous · back · play/pause · forward · next · repeat.
-Below it, a volume slider for players that implement MPRIS Volume — browsers
-route through PipeWire instead and report no support, so the row is hidden for
-them rather than showing a slider that does nothing.
-
 Controls a player does not support are dimmed rather than hidden. Clicking the
 cover asks the player to bring its own window forward. When more than one
 player is running, each appears in a list below with its app icon; the list
@@ -159,14 +154,11 @@ omarchy-shell media seekTo 90     # absolute seconds
 omarchy-shell media seekPercent 50
 omarchy-shell media shuffle
 omarchy-shell media loop          # off -> all -> track
-omarchy-shell media volume 60     # percent
-omarchy-shell media volumeUp      # 5% steps
-omarchy-shell media volumeDown
 omarchy-shell media raise         # focus the player's own window
 omarchy-shell media sourceNext
 ```
 
-`status` also reports `volume`, `volumeSupported` and `canRaise`.
+`status` also reports `canRaise`.
 
 ## Dismissal
 
