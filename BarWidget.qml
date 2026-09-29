@@ -1244,6 +1244,10 @@ BarWidget {
                 readonly property real pelletPitch: Style.space(9)
                 // Half-angle of the open mouth, in radians.
                 readonly property real maxMouth: 0.62
+                // How far ahead of his centre a pellet is swallowed. One value
+                // for both the bite trigger and the pellet that disappears, so
+                // the two can never drift apart.
+                readonly property real eatOffset: pacRadius * 0.85
 
                 // Chomping stops when playback does, easing over the same 260ms
                 // the wiggle takes to flatten. It settles on a mouth that is
@@ -1252,6 +1256,37 @@ BarWidget {
                 // his mouth open keeps him legible while paused.
                 property real chomp: active ? 1 : 0
                 readonly property real restingMouth: 0.55
+
+                // A bite is an event, not a rhythm. Counting the pellets he has
+                // reached gives an integer that changes only on arrival, so the
+                // mouth is driven by the dots rather than by a free-running
+                // clock that happens to be chomping at thin air between them.
+                readonly property int pelletsEaten: {
+                  if (!root.pacmanProgress || width <= 0) return 0
+                  var pitch = Math.max(2, pelletPitch)
+                  var travel = Math.max(1, width - 2 * pacRadius)
+                  var mouthX = pacRadius + wiggleBar.fraction * travel + eatOffset
+                  return Math.max(0, Math.floor((mouthX - pacRadius) / pitch) + 1)
+                }
+
+                // 0 is wide open, 1 is shut. Snap closed, ease back open.
+                property real bite: 0
+
+                SequentialAnimation {
+                  id: biteAnim
+                  NumberAnimation {
+                    target: wave; property: "bite"; to: 1
+                    duration: 70; easing.type: Easing.InQuad
+                  }
+                  NumberAnimation {
+                    target: wave; property: "bite"; to: 0
+                    duration: 120; easing.type: Easing.OutQuad
+                  }
+                }
+
+                onPelletsEatenChanged: {
+                  if (root.popupOpen && root.pacmanProgress) biteAnim.restart()
+                }
 
                 Behavior on amplitude { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
                 Behavior on chomp { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
@@ -1263,8 +1298,13 @@ BarWidget {
                   // of snapping it back to zero. Repaints are gated on
                   // visibility below, so nothing is drawn when another progress
                   // style is selected.
+                  //
+                  // Pacman is deliberately NOT in this condition. Its bite is
+                  // driven by arrivals, so it needs no per-frame clock at all,
+                  // and leaving this running for it would repaint the canvas
+                  // sixty times a second to move nothing.
                   running: true
-                  paused: !root.popupOpen || !root.styledProgress || !wave.active
+                  paused: !root.popupOpen || !root.wiggleProgress || !wave.active
                   loops: Animation.Infinite
                   from: 0
                   to: 2 * Math.PI
@@ -1275,6 +1315,7 @@ BarWidget {
                 onPhaseChanged: if (visible) requestPaint()
                 onAmplitudeChanged: if (visible) requestPaint()
                 onChompChanged: if (visible) requestPaint()
+                onBiteChanged: if (visible) requestPaint()
                 Connections {
                   target: root
                   function onProgressAnimationChanged() { wave.requestPaint() }
@@ -1322,16 +1363,16 @@ BarWidget {
                     // Pellets still to eat. The grid is anchored to the left
                     // edge rather than to him, so they hold still while he
                     // advances through them instead of sliding along with him.
-                    // The last slot is the power pellet, and it pulses.
+                    // The last slot is the power pellet, drawn larger.
                     var lastSlot = pacR
                     for (var gx = pacR; gx <= width - pacR; gx += pitch) lastSlot = gx
 
                     ctx.fillStyle = Style.selectedFillFor(root.bar.foreground, Color.accent)
                     for (var px = pacR; px <= width - pacR; px += pitch) {
                       // Eaten once he reaches it.
-                      if (px < pacX + pacR * 0.85) continue
+                      if (px < pacX + wave.eatOffset) continue
                       var pr = px === lastSlot
-                        ? wave.pelletRadius * (1.7 + 0.2 * Math.sin(wave.phase * 2))
+                        ? wave.pelletRadius * 1.7
                         : wave.pelletRadius
                       ctx.beginPath()
                       ctx.arc(px, mid, pr, 0, 2 * Math.PI)
@@ -1341,12 +1382,13 @@ BarWidget {
                     // Pac-Man. The wedge is cut around angle 0 so the mouth
                     // faces the direction of travel; the pie is drawn from one
                     // lip clockwise round to the other.
-                    // Chomping while playing, a fixed open mouth when not.
-                    // Blended by `chomp` so the transition is continuous rather
-                    // than a jump between two behaviours.
-                    var bite = Math.abs(Math.sin(wave.phase * 3))
+                    // Wide open while travelling, snapped shut by the bite as
+                    // he arrives at a pellet, and easing to a fixed open mouth
+                    // when playback stops. Blended by `chomp` so stopping is a
+                    // settle rather than a jump between two behaviours.
+                    var openness = 1 - wave.bite
                     var mouth = wave.maxMouth
-                      * (wave.chomp * bite + (1 - wave.chomp) * wave.restingMouth)
+                      * (wave.chomp * openness + (1 - wave.chomp) * wave.restingMouth)
                     ctx.fillStyle = Color.accent
                     ctx.beginPath()
                     ctx.moveTo(pacX, mid)
