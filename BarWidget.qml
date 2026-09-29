@@ -276,8 +276,13 @@ BarWidget {
   // fill travels on is ours to choose; PanelSlider's own 140ms smoothing
   // rides on top of whichever we pick.
   readonly property var progressStyles: ["default", "wiggle", "pacman"]
+  // The raw config value, before the legacy alias is resolved. setProgress-
+  // Animation compares against THIS: a user still holding "stripes" sees
+  // "Pac-Man" already selected, so comparing against the resolved value made
+  // clicking it a no-op and left the stale value in shell.json forever.
+  readonly property string storedProgressAnimation: String(setting("progressAnimation", "default"))
   readonly property string progressAnimation: {
-    var stored = String(setting("progressAnimation", "default"))
+    var stored = root.storedProgressAnimation
     // "stripes" was the barber-pole style up to v1.1.1, which pacman replaced.
     // Map it rather than letting an existing config fall silently back to the
     // plain bar -- the user picked a drawn style, so give them one.
@@ -339,7 +344,7 @@ BarWidget {
 
   function setProgressAnimation(style) {
     if (root.progressStyles.indexOf(style) === -1) return
-    if (style === root.progressAnimation) return
+    if (style === root.storedProgressAnimation) return
     writeSetting("progressAnimation", style)
   }
 
@@ -1189,6 +1194,14 @@ BarWidget {
               readonly property real activeWidth: Math.round(fraction * width)
 
               function fractionAt(x) {
+                // Pacman is inset by his own radius at both ends so he is not
+                // sliced in half at 0% and 100%, so the pointer has to map
+                // through that same inset or he lands beside the cursor rather
+                // than under it. The other styles span the full width.
+                if (root.pacmanProgress) {
+                  var r = wave.pacRadius
+                  return Math.min(1, Math.max(0, (x - r) / Math.max(1, width - 2 * r)))
+                }
                 return Math.min(1, Math.max(0, x / Math.max(1, width)))
               }
 
@@ -1238,12 +1251,21 @@ BarWidget {
                 // reached gives an integer that changes only on arrival, so the
                 // mouth is driven by the dots rather than by a free-running
                 // clock that happens to be chomping at thin air between them.
+                // Deliberately NOT gated on pacmanProgress: gating made the
+                // count collapse to 0 for the other styles, so switching into
+                // pacman stepped it 0 -> N and fired a chomp on arrival at
+                // nothing. As a pure function of position it simply does not
+                // change when the style does. Clamped to the pellets actually
+                // drawn, or the eatOffset pushes it one past the last slot and
+                // the track ends with a bite at empty space.
                 readonly property int pelletsEaten: {
-                  if (!root.pacmanProgress || width <= 0) return 0
+                  if (width <= 0) return 0
                   var pitch = Math.max(2, pelletPitch)
                   var travel = Math.max(1, width - 2 * pacRadius)
+                  var slots = Math.floor(travel / pitch) + 1
                   var mouthX = pacRadius + wiggleBar.fraction * travel + eatOffset
-                  return Math.max(0, Math.floor((mouthX - pacRadius) / pitch) + 1)
+                  var n = Math.floor((mouthX - pacRadius) / pitch) + 1
+                  return Math.max(0, Math.min(slots, n))
                 }
 
                 // 0 is shut, 1 is wide open. He travels with his mouth closed
@@ -1346,10 +1368,22 @@ BarWidget {
                     var lastSlot = pacR
                     for (var gx = pacR; gx <= width - pacR; gx += pitch) lastSlot = gx
 
-                    ctx.fillStyle = Style.selectedFillFor(root.bar.foreground, Color.accent)
+                    // While he is mid-bite the pellet he is taking stays drawn,
+                    // so it sits inside the open mouth and goes as the mouth
+                    // shuts on it. Without this it vanishes the instant the bite
+                    // is triggered and he closes on nothing.
+                    var eatenEdge = pacX + wave.eatOffset
+                    if (wave.bite > 0) eatenEdge -= pitch
+
+                    // Not Style.selectedFillFor: its 0.18 alpha is tuned for the
+                    // contiguous 4dp track it used to fill, and a 2dp
+                    // antialiased dot keeps far less of it -- measured at ~10%
+                    // luminance over the surface, against 43% for the trail.
+                    // mutedText mixes toward the surface instead, so the dots
+                    // stay legible on a light theme as well as a dark one.
+                    ctx.fillStyle = root.mutedText(0.45)
                     for (var px = pacR; px <= width - pacR; px += pitch) {
-                      // Eaten once he reaches it.
-                      if (px < pacX + wave.eatOffset) continue
+                      if (px < eatenEdge) continue
                       var pr = px === lastSlot
                         ? wave.pelletRadius * 1.7
                         : wave.pelletRadius
@@ -1378,7 +1412,14 @@ BarWidget {
                     // plain circle parked on a line. While the wedge is open
                     // this line lies inside the cut and is invisible, so one
                     // stroke serves both states.
-                    ctx.strokeStyle = Color.popups.background
+                    // destination-out, not a fill in the surface colour: a
+                    // theme may set popups.background-alpha below 1, and
+                    // painting a translucent "background" over the accent
+                    // blends instead of cutting, which faded the seam out on
+                    // exactly the themes it is needed most. Erasing leaves a
+                    // real hole through to the card.
+                    ctx.globalCompositeOperation = "destination-out"
+                    ctx.strokeStyle = "#000"
                     ctx.lineWidth = Math.max(1, pacR * 0.14)
                     ctx.lineCap = "butt"
                     ctx.beginPath()
@@ -1388,11 +1429,12 @@ BarWidget {
 
                     // The eye, punched out in the surface colour so it stays a
                     // hole on any theme rather than a second painted dot.
-                    ctx.fillStyle = Color.popups.background
+                    ctx.fillStyle = "#000"
                     ctx.beginPath()
                     ctx.arc(pacX - pacR * 0.12, mid - pacR * 0.42,
                             Math.max(1, pacR * 0.17), 0, 2 * Math.PI)
                     ctx.fill()
+                    ctx.globalCompositeOperation = "source-over"
                     return
                   }
 
